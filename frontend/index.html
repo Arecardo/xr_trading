@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="XR-Trading 量化投资研究平台，以投资组合为核心研究美股、ETF 与数字加密货币。" />
+    <title>XR-Trading 量化投资研究平台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">XR</div>
+          <div class="brand-copy">
+            <p class="eyebrow">XR-TRADING</p>
+            <h1>量化投资研究平台</h1>
+            <p class="subtitle">以组合为核心，连接研究、策略、风险与执行</p>
+          </div>
+        </div>
+        <div class="session-actions">
+          <span id="workspaceMode" class="mode-pill hidden">RESEARCH</span>
+          <button id="themeToggleBtn" class="icon-btn" type="button" title="切换明亮/暗色模式" aria-label="切换明亮/暗色模式">☀</button>
+          <div id="userMenuShell" class="user-menu-shell hidden">
+            <button id="userMenuButton" class="user-chip" type="button" aria-haspopup="menu" aria-expanded="false">
+              <span class="user-chip-dot"></span>
+              <span id="sessionName" class="session-name">未登录</span>
+              <span class="user-chip-caret">⌄</span>
+            </button>
+            <div id="userMenu" class="user-menu hidden" role="menu" aria-label="用户菜单">
+              <section class="user-menu-head">
+                <p class="eyebrow">研究账户</p>
+                <strong id="dropdownUserName" class="user-menu-name"></strong>
+                <span id="dropdownUserEmail" class="user-menu-email"></span>
+              </section>
+              <dl class="user-menu-meta" id="dropdownUserInfo"></dl>
+              <form id="passwordForm" class="stack user-menu-form">
+                <label>原密码<input name="old_password" type="password" autocomplete="current-password" required /></label>
+                <label>新密码<input name="new_password" type="password" autocomplete="new-password" minlength="8" required /></label>
+                <button type="submit" class="secondary-btn">修改密码</button>
+              </form>
+              <div class="user-menu-actions">
+                <button id="deleteAccountBtn" class="danger-btn" type="button">注销账户</button>
+                <button id="logoutBtn" class="ghost-btn" type="button">退出登录</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section id="authPanel" class="auth-shell">
+        <div class="auth-hero">
+          <p class="eyebrow">PERSONAL QUANT RESEARCH</p>
+          <h2>把零散观点，变成可追踪的投资组合。</h2>
+          <p class="subtitle">围绕美股、ETF 与数字加密货币，逐步建立自己的研究、回测、风控和模拟执行体系。</p>
+          <div class="auth-points">
+            <span>跨市场资产</span><span>组合化研究</span><span>风险优先</span><span>可审计决策</span>
+          </div>
+          <p class="disclaimer">仅用于个人量化投资研究，不构成投资建议或收益承诺。</p>
+        </div>
+
+        <article class="panel auth-card">
+          <div class="segmented" role="tablist" aria-label="认证方式">
+            <button id="loginTabBtn" class="segment active" type="button" aria-pressed="true">登录</button>
+            <button id="registerTabBtn" class="segment" type="button" aria-pressed="false">注册</button>
+          </div>
+          <form id="loginForm" class="auth-form active">
+            <label>账号或邮箱<input name="identity" autocomplete="username" required /></label>
+            <label>密码<input name="password" type="password" autocomplete="current-password" required /></label>
+            <button type="submit" class="primary-btn">进入研究平台</button>
+          </form>
+          <form id="registerForm" class="auth-form">
+            <label>用户名<input name="username" autocomplete="username" minlength="3" required /></label>
+            <label>邮箱<input name="email" type="email" autocomplete="email" required /></label>
+            <label>密码<input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <button type="submit" class="secondary-btn">创建研究账户</button>
+          </form>
+        </article>
+      </section>
+
+      <section id="appPanel" class="hidden">
+        <nav class="primary-nav" aria-label="主要导航">
+          <button class="nav-item active" data-page="overview" type="button">总览</button>
+          <button class="nav-item" data-page="portfolios" type="button">投资组合</button>
+          <button class="nav-item" data-page="assets" type="button">资产研究</button>
+          <button class="nav-item" data-page="strategies" type="button">策略实验室</button>
+          <button class="nav-item" data-page="backtest" type="button">回测</button>
+          <button class="nav-item" data-page="trading" type="button">交易与订单</button>
+          <button class="nav-item" data-page="risk" type="button">风险中心</button>
+          <button class="nav-item" data-page="reports" type="button">报告</button>
+          <button class="nav-item" data-page="settings" type="button">设置</button>
+        </nav>
+
+        <section id="page-overview" class="page active">
+          <div class="page-heading">
+            <div><p class="eyebrow">PORTFOLIO COMMAND</p><h2>研究总览</h2></div>
+            <p>从组合出发观察资产范围、运行模式和下一步工作。</p>
+          </div>
+          <section class="metric-grid">
+            <article class="metric-card"><span>投资组合</span><strong id="overviewPortfolioCount">0</strong><small>跨市场研究容器</small></article>
+            <article class="metric-card"><span>运行中</span><strong id="overviewActiveCount">0</strong><small>active 状态组合</small></article>
+            <article class="metric-card"><span>研究资产</span><strong id="overviewAssetCount">0</strong><small>统一资产目录</small></article>
+            <article class="metric-card"><span>市场覆盖</span><strong>2</strong><small>美股 · 数字加密货币</small></article>
+          </section>
+          <section class="dashboard-grid">
+            <article class="panel span-two">
+              <div class="panel-heading"><div><p class="eyebrow">PORTFOLIOS</p><h3>最近投资组合</h3></div><button class="text-btn" data-go-page="portfolios" type="button">管理组合 →</button></div>
+              <div id="overviewPortfolioList" class="compact-list"></div>
+            </article>
+            <article class="panel research-flow">
+              <p class="eyebrow">RESEARCH FLOW</p><h3>组合决策链路</h3>
+              <ol><li>资产数据与研究</li><li>策略生成目标权重</li><li>组合级风险校验</li><li>模拟执行与复盘</li></ol>
+              <p class="muted-note">实盘权限默认关闭。每一笔交易都必须可追溯到组合、策略与风控记录。</p>
+            </article>
+          </section>
+        </section>
+
+        <section id="page-portfolios" class="page">
+          <div class="page-heading">
+            <div><p class="eyebrow">PORTFOLIO MANAGEMENT</p><h2>投资组合</h2></div>
+            <p>定义投资目标、市场范围、风险等级和执行环境。</p>
+          </div>
+          <section class="portfolio-layout">
+            <article class="panel form-panel">
+              <div class="panel-heading"><div><p class="eyebrow">NEW PORTFOLIO</p><h3>创建投资组合</h3></div></div>
+              <form id="portfolioForm" class="stack">
+                <label>组合名称<input name="name" maxlength="60" placeholder="美股与加密成长组合" required /></label>
+                <label>投资目标<textarea name="description" rows="3" placeholder="记录组合目标、策略边界和配置思路"></textarea></label>
+                <div class="form-grid">
+                  <label>基础货币<select name="base_currency"><option value="USD">USD</option></select></label>
+                  <label>基准<input name="benchmark" value="QQQ" maxlength="24" /></label>
+                  <label>风险等级<select name="risk_level"><option value="conservative">稳健</option><option value="moderate" selected>均衡</option><option value="growth">成长</option><option value="aggressive">进取</option></select></label>
+                  <label>运行模式<select name="execution_mode"><option value="research">研究</option><option value="backtest">回测</option><option value="paper">模拟盘</option></select></label>
+                </div>
+                <fieldset><legend>允许的资产类型</legend><div class="check-row">
+                  <label><input type="checkbox" name="asset_type" value="STOCK" checked />美股</label>
+                  <label><input type="checkbox" name="asset_type" value="ETF" checked />ETF</label>
+                  <label><input type="checkbox" name="asset_type" value="CRYPTO" checked />加密资产</label>
+                  <label><input type="checkbox" name="asset_type" value="CASH" checked />现金</label>
+                </div></fieldset>
+                <label>初始状态<select name="status"><option value="draft">草稿</option><option value="active">运行中</option></select></label>
+                <button type="submit" class="primary-btn">创建投资组合</button>
+              </form>
+            </article>
+            <article class="panel portfolio-library">
+              <div class="panel-heading"><div><p class="eyebrow">YOUR PORTFOLIOS</p><h3>组合库</h3></div><span id="portfolioCountBadge" class="count-badge">0</span></div>
+              <div id="portfolioList" class="portfolio-list"></div>
+            </article>
+          </section>
+
+          <article id="portfolioDetail" class="panel detail-panel hidden">
+            <div class="panel-heading"><div><p class="eyebrow">PORTFOLIO MEMBERS</p><h3 id="portfolioDetailTitle">组合资产</h3></div><span id="portfolioDetailMeta" class="muted-note"></span></div>
+            <div class="member-layout">
+              <form id="memberForm" class="member-form">
+                <label>选择资产<select id="memberAssetSelect" name="asset_id" required></select></label>
+                <label>成员状态<select name="member_status"><option value="candidate">研究候选</option><option value="approved">允许配置</option><option value="restricted">禁止新增</option></select></label>
+                <label>最大目标权重<input name="target_weight_max" type="number" min="0" max="1" step="0.01" value="0.15" required /></label>
+                <label>加入理由<input name="added_reason" placeholder="配置逻辑或研究假设" /></label>
+                <button type="submit" class="secondary-btn">加入组合</button>
+              </form>
+              <div id="memberList" class="member-list"></div>
+            </div>
+          </article>
+        </section>
+
+        <section id="page-assets" class="page">
+          <div class="page-heading"><div><p class="eyebrow">ASSET CATALOG</p><h2>资产研究</h2></div><p>使用稳定的 asset_id 统一美股、ETF、加密资产和现金。</p></div>
+          <article class="panel">
+            <div class="catalog-toolbar"><input id="assetSearch" type="search" placeholder="搜索代码或资产名称" /><span id="assetCatalogCount" class="count-badge">0</span></div>
+            <div id="assetCatalog" class="asset-grid"></div>
+          </article>
+        </section>
+
+        <section id="page-strategies" class="page planned-page" data-module="策略实验室"><div class="planned-content"><span>03</span><p class="eyebrow">STRATEGY LAB</p><h2>让观点成为可版本化的策略</h2><p>下一阶段将承载策略参数、资产类型评分模型、目标权重生成和策略版本比较。</p></div></section>
+        <section id="page-backtest" class="page planned-page" data-module="回测"><div class="planned-content"><span>04</span><p class="eyebrow">BACKTEST</p><h2>跨市场验证，而不是只看收益</h2><p>计划支持美股交易日历、加密 24/7 时间轴、交易成本、回撤、Sharpe 与基准对比。</p></div></section>
+        <section id="page-trading" class="page planned-page" data-module="交易与订单"><div class="planned-content"><span>05</span><p class="eyebrow">EXECUTION</p><h2>从调仓计划到可审计订单</h2><p>美股模拟执行将优先接入长桥；加密交易通道在完成供应商和安全评审后开放。</p></div></section>
+        <section id="page-risk" class="page planned-page" data-module="风险中心"><div class="planned-content"><span>06</span><p class="eyebrow">RISK CENTER</p><h2>先定义风险预算，再讨论收益</h2><p>这里将集中展示资产、类别、市场敞口，现金比例、最大回撤与风控拦截记录。</p></div></section>
+        <section id="page-reports" class="page planned-page" data-module="报告"><div class="planned-content"><span>07</span><p class="eyebrow">REPORTS</p><h2>把每一次决策留在时间线上</h2><p>组合日报、调仓计划、风险报告和回测结果将从统一审计链路生成。</p></div></section>
+        <section id="page-settings" class="page">
+          <div class="page-heading"><div><p class="eyebrow">WORKSPACE SETTINGS</p><h2>设置</h2></div><p>管理研究账户与平台运行边界。</p></div>
+          <section class="dashboard-grid">
+            <article class="panel"><p class="eyebrow">ACCOUNT</p><h3 id="settingsUserName">研究账户</h3><p id="settingsUserEmail" class="muted-note"></p><button id="openAccountMenuBtn" class="secondary-btn" type="button">账户与安全设置</button></article>
+            <article class="panel"><p class="eyebrow">EXECUTION POLICY</p><h3>默认安全边界</h3><ul class="policy-list"><li>实盘模式不可用</li><li>加密交易适配器未启用</li><li>组合删除采用归档</li><li>研究与执行权限隔离</li></ul></article>
+          </section>
+        </section>
+      </section>
+
+      <div id="toast" class="toast hidden" role="status"></div>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
