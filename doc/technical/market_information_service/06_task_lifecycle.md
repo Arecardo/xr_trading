@@ -26,6 +26,7 @@ canceled
 | `locked_until` | 当前任务租约过期时间 |
 | `started_at` / `finished_at` | 任务开始与结束时间 |
 | `error_code` / `error_message` / `error_details` | 失败原因 |
+| `retry_of_task_id` | 手动重试生成的新任务所引用的原失败任务 |
 
 ### 8.1 Task 状态机
 
@@ -144,6 +145,10 @@ else:
 ```
 
 供应商返回明确 `Retry-After` 时优先使用供应商建议，但不得超过系统配置的最大等待时间。
+
+系统自动重试在原 Task 上进行。管理员手动重试只接受终态 `failed` Task，并创建一个新的手动 Run 和一个新 Task：新任务复用原任务的订阅与时间范围，通过 `retry_of_task_id` 指向原任务。原任务保持 `failed`，其尝试次数和错误信息不得重置。
+
+同一个失败 Task 已存在 `pending`、`running` 或 `retry_wait` 的手动重试任务时，不允许再次创建，API 返回 `409 MANUAL_RETRY_ALREADY_RUNNING`。
 
 ### 8.5 成功提交规则
 

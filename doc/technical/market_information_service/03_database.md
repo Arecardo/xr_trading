@@ -211,6 +211,7 @@ CREATE TABLE market_data.provider_instruments (
     provider_market     varchar(32) NOT NULL,
     capabilities        jsonb NOT NULL DEFAULT '{}',
     priority            smallint NOT NULL DEFAULT 100,
+    is_default          boolean NOT NULL DEFAULT false,
     enabled             boolean NOT NULL DEFAULT true,
     valid_from          timestamptz,
     valid_to            timestamptz,
@@ -236,7 +237,13 @@ CREATE UNIQUE INDEX uq_active_provider_external_symbol
 
 CREATE INDEX idx_provider_instruments_instrument
     ON market_data.provider_instruments (instrument_id, enabled);
+
+CREATE UNIQUE INDEX uq_enabled_default_provider_instrument
+    ON market_data.provider_instruments (instrument_id)
+    WHERE enabled = true AND is_default = true AND valid_to IS NULL;
 ```
+
+`priority` 数值越小优先级越高，用于没有显式默认来源时的稳定排序。`is_default` 用于 API 和前端为某个 Instrument 选择默认 Provider；部分唯一索引保证同一 Instrument 最多存在一个当前启用且仍有效的默认来源。
 
 `capabilities` 示例：
 
@@ -259,7 +266,6 @@ CREATE TABLE market_data.collection_subscriptions (
     interval                varchar(8) NOT NULL,
     enabled                 boolean NOT NULL DEFAULT true,
     priority                smallint NOT NULL DEFAULT 100,
-    backfill_from           timestamptz,
     close_delay_seconds     integer NOT NULL DEFAULT 120,
     revision_delay_seconds  integer,
     metadata                jsonb NOT NULL DEFAULT '{}',
@@ -451,13 +457,14 @@ CREATE TABLE market_data.ingestion_runs (
 
 ### 6.2 market_data.ingestion_tasks
 
-Task 是 Worker 真正执行的最小任务，一个任务获取某个订阅在指定时间范围内的一批数据。历史回填根据供应商分页和限流拆成多个 Task。
+Task 是 Worker 真正执行的最小任务，一个任务获取某个订阅在指定时间范围内的数据。首期手动回填一次只创建一个 Run 和一个 Task；供应商分页由 Worker 在该 Task 内部完成，不按分页批量创建 Task。
 
 ```sql
 CREATE TABLE market_data.ingestion_tasks (
     id                      uuid PRIMARY KEY,
     run_id                  uuid NOT NULL,
     subscription_id         uuid NOT NULL,
+    retry_of_task_id        uuid,
     range_start             timestamptz NOT NULL,
     range_end               timestamptz NOT NULL,
     status                  varchar(16) NOT NULL DEFAULT 'pending',
@@ -472,6 +479,8 @@ CREATE TABLE market_data.ingestion_tasks (
     error_code              varchar(64),
     error_message           text,
     error_details           jsonb NOT NULL DEFAULT '{}',
+    canceled_by             varchar(128),
+    cancel_reason           text,
     created_at              timestamptz NOT NULL DEFAULT now(),
     updated_at              timestamptz NOT NULL DEFAULT now(),
 
@@ -480,6 +489,9 @@ CREATE TABLE market_data.ingestion_tasks (
     CONSTRAINT fk_ingestion_tasks_subscription
         FOREIGN KEY (subscription_id)
         REFERENCES market_data.collection_subscriptions(id),
+    CONSTRAINT fk_ingestion_tasks_retry_of
+        FOREIGN KEY (retry_of_task_id)
+        REFERENCES market_data.ingestion_tasks(id),
     CONSTRAINT uq_ingestion_task_range
         UNIQUE (run_id, subscription_id, range_start, range_end),
     CONSTRAINT ck_ingestion_tasks_range CHECK (range_end > range_start),
@@ -499,9 +511,22 @@ CREATE INDEX idx_ingestion_tasks_claim
 CREATE INDEX idx_ingestion_tasks_lease
     ON market_data.ingestion_tasks (locked_until)
     WHERE status = 'running';
+
+CREATE INDEX idx_ingestion_tasks_retry_of
+    ON market_data.ingestion_tasks (retry_of_task_id)
+    WHERE retry_of_task_id IS NOT NULL;
+
+CREATE UNIQUE INDEX uq_active_manual_retry
+    ON market_data.ingestion_tasks (retry_of_task_id)
+    WHERE retry_of_task_id IS NOT NULL
+      AND status IN ('pending', 'running', 'retry_wait');
 ```
 
 Worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 抢占任务并设置租约。Run 内相同订阅和范围不能重复；不同 Run 可以重采相同范围，用于修订和修复，最终由行情版本规则保证幂等。
+
+系统自动重试继续使用原 Task 并增加 `attempt_count`。管理员对终态 `failed` Task 发起手动重试时，创建新的 Run 和 Task，并通过 `retry_of_task_id` 保留与原失败任务的审计关系；原 Task 状态和错误信息不被修改。
+
+同一个失败 Task 同时最多存在一个未结束的手动重试任务，`uq_active_manual_retry` 用于防止重复点击或并发请求创建等价任务。
 
 ### 6.3 market_data.ingestion_checkpoints
 
@@ -573,7 +598,7 @@ CREATE UNIQUE INDEX uq_open_quality_issue
 
 ## 10. 事务边界
 
-- 创建 Run 与批量创建 Task 使用同一事务；任务创建失败时 Run 不进入 `running`。
+- 创建 Run 与其关联 Task 使用同一事务；任一任务创建失败时 Run 不进入 `running`。首期手动回填只创建一个关联 Task。
 - Task 成功时，行情写入、checkpoint 推进和 Task 状态更新使用同一事务。
 - K 线修订时，关闭旧版本和插入新版本使用同一事务。
 - Run 汇总计数可以事务内更新或从 Task 聚合重算，数据库中的 Task 状态是最终事实来源。
