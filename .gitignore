@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 data/app/*.sqlite3
 data/app/*.sqlite3-*
+coverage.out
+market-info-service/bin/

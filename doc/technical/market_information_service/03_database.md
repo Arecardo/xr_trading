@@ -6,7 +6,7 @@
 
 本设计覆盖市场资讯服务第一阶段所需的资产主数据、供应商映射、最新行情、`1h`/`1d` K 线、采集任务和数据质量记录。
 
-- 使用 PostgreSQL，同一数据库内按 `core` 与 `market_data` schema 隔离。
+- 使用 PostgreSQL 15 或更高版本，同一数据库内按 `core` 与 `market_data` schema 隔离。
 - 领域实体和任务使用应用生成的 UUIDv7，数据库列使用原生 `uuid` 类型。
 - 所有外键使用 UUID；可读 `code` 只用于配置、API、日志和人工定位。
 - `code`、市场 `symbol` 与供应商 `external_symbol` 分别保存。
@@ -37,8 +37,9 @@ market_data
   data_quality_issues
 ```
 
-- 核心资产目录拥有 `core.assets` 和 `core.instruments`。
+- 独立核心资产目录拥有并迁移 `core` schema；市场资讯服务的生产 migration 不创建或修改它。
 - 市场资讯服务对核心主数据只读，对 `market_data` schema 读写。
+- 本地与 CI 使用独立 bootstrap fixture 创建最小 `core` 前置结构，不混入生产 migration 历史。
 - `provider_instruments` 仅描述行情供应商映射，不承载下单权限和交易能力。
 - 交易服务需要独立维护交易侧券商映射。
 
@@ -593,8 +594,11 @@ CREATE UNIQUE INDEX uq_open_quality_issue
         open_time,
         rule_code
     )
+    NULLS NOT DISTINCT
     WHERE status IN ('open', 'acknowledged');
 ```
+
+可空维度中的 `NULL` 表示该维度未指定。PostgreSQL 15 的 `NULLS NOT DISTINCT` 保证等价的开放问题不会因为 NULL 而绕过去重；全局问题与指定 Provider 的问题仍可分别存在。
 
 ## 10. 事务边界
 
