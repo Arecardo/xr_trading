@@ -72,8 +72,9 @@ flowchart LR
 | ENG-003 配置、HTTP 生命周期、health handler | DONE | 使用可注入 readiness checker；真实数据库装配纳入 DB-007 |
 | DB-004 Migration 基础设施 | DONE | 嵌入式 goose migration、迁移 CLI、重复执行和版本兼容 checker 已通过 |
 | DB-006 本地 PostgreSQL | DONE | Colima/Docker Compose 冷启动、迁移、重启保留数据已验证 |
-| QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；当前覆盖率 95.2% |
-| PLAN-001 可执行实施计划 | DONE | 已完成评审；下一步进入 DB-007、DB-009 与 Repository 契约实现 |
+| DB-007 连接池与真实 readyz | DONE | pgxpool 配置解析、启动 Ping、真实 `/readyz=200/503` 与故障语义集成测试通过 |
+| QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；当前覆盖率 86.2% |
+| PLAN-001 可执行实施计划 | DONE | 领域与应用层文档门禁已评审并补齐；DOM-001～002 已完成，下一步进入 DOM-003 |
 
 ## 7. 首期明确不做
 

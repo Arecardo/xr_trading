@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"xr-trading/market-info-service/internal/observability"
 )
 
@@ -142,7 +144,7 @@ func (s *stubDB) Ping(context.Context) error {
 	return s.pingErr
 }
 
-func (s *stubDB) QueryRow(_ context.Context, query string, _ ...any) Row {
+func (s *stubDB) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
 	s.query = query
 	return stubRow{version: s.version, err: s.rowErr}
 }

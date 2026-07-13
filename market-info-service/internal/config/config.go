@@ -17,6 +17,10 @@ const (
 	defaultIdleTimeout      = 60 * time.Second
 	defaultShutdownTimeout  = 10 * time.Second
 	defaultReadinessTimeout = 2 * time.Second
+	defaultDBMaxConns       = int32(8)
+	defaultDBMinConns       = int32(1)
+	defaultDBMaxConnLife    = 30 * time.Minute
+	defaultDBHealthPeriod   = 30 * time.Second
 )
 
 // Config contains runtime configuration for the HTTP process.
@@ -27,6 +31,11 @@ type Config struct {
 	IdleTimeout      time.Duration
 	ShutdownTimeout  time.Duration
 	ReadinessTimeout time.Duration
+	DatabaseURL      string
+	DBMaxConns       int32
+	DBMinConns       int32
+	DBMaxConnLife    time.Duration
+	DBHealthPeriod   time.Duration
 }
 
 // LookupEnv provides environment values to the configuration loader.
@@ -50,6 +59,11 @@ func LoadFrom(lookup LookupEnv) (Config, error) {
 		IdleTimeout:      defaultIdleTimeout,
 		ShutdownTimeout:  defaultShutdownTimeout,
 		ReadinessTimeout: defaultReadinessTimeout,
+		DatabaseURL:      valueOrDefault(lookup, "MARKET_INFO_DATABASE_URL", ""),
+		DBMaxConns:       defaultDBMaxConns,
+		DBMinConns:       defaultDBMinConns,
+		DBMaxConnLife:    defaultDBMaxConnLife,
+		DBHealthPeriod:   defaultDBHealthPeriod,
 	}
 
 	durations := []struct {
@@ -61,6 +75,8 @@ func LoadFrom(lookup LookupEnv) (Config, error) {
 		{"MARKET_INFO_HTTP_IDLE_TIMEOUT", &cfg.IdleTimeout},
 		{"MARKET_INFO_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout},
 		{"MARKET_INFO_READINESS_TIMEOUT", &cfg.ReadinessTimeout},
+		{"MARKET_INFO_DB_MAX_CONN_LIFETIME", &cfg.DBMaxConnLife},
+		{"MARKET_INFO_DB_HEALTH_CHECK_PERIOD", &cfg.DBHealthPeriod},
 	}
 	for _, item := range durations {
 		value, ok := lookup(item.name)
@@ -72,6 +88,21 @@ func LoadFrom(lookup LookupEnv) (Config, error) {
 			return Config{}, fmt.Errorf("parse %s: %w", item.name, err)
 		}
 		*item.target = parsed
+	}
+
+	if value, ok := lookup("MARKET_INFO_DB_MAX_CONNS"); ok && value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse MARKET_INFO_DB_MAX_CONNS: %w", err)
+		}
+		cfg.DBMaxConns = int32(parsed)
+	}
+	if value, ok := lookup("MARKET_INFO_DB_MIN_CONNS"); ok && value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse MARKET_INFO_DB_MIN_CONNS: %w", err)
+		}
+		cfg.DBMinConns = int32(parsed)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -102,6 +133,18 @@ func (c Config) Validate() error {
 		if item.value <= 0 {
 			return fmt.Errorf("%s must be positive", item.name)
 		}
+	}
+	if c.DatabaseURL == "" {
+		return errors.New("MARKET_INFO_DATABASE_URL is required")
+	}
+	if c.DBMaxConns <= 0 {
+		return errors.New("MARKET_INFO_DB_MAX_CONNS must be positive")
+	}
+	if c.DBMinConns < 0 {
+		return errors.New("MARKET_INFO_DB_MIN_CONNS must not be negative")
+	}
+	if c.DBMinConns > c.DBMaxConns {
+		return errors.New("MARKET_INFO_DB_MIN_CONNS must be less than or equal to MARKET_INFO_DB_MAX_CONNS")
 	}
 	return nil
 }

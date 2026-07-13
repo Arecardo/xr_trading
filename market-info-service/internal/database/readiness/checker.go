@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"xr-trading/market-info-service/internal/observability"
 )
 
@@ -19,12 +21,7 @@ LIMIT 1`
 // DB is the minimal database surface needed by the readiness checker.
 type DB interface {
 	Ping(context.Context) error
-	QueryRow(context.Context, string, ...any) Row
-}
-
-// Row is the minimal pgx row surface needed by the readiness checker.
-type Row interface {
-	Scan(...any) error
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 // Checker verifies PostgreSQL availability and migration compatibility.

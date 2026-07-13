@@ -37,9 +37,9 @@ func run(ctx context.Context, lookup lookupEnv, open openDatabase, migrate migra
 	if lookup == nil || open == nil || migrate == nil {
 		return errors.New("migration dependencies are required")
 	}
-	databaseURL, ok := lookup("MARKET_INFO_DATABASE_URL")
+	databaseURL, ok := lookup("MARKET_INFO_MIGRATION_DATABASE_URL")
 	if !ok || databaseURL == "" {
-		return errors.New("MARKET_INFO_DATABASE_URL is required")
+		return errors.New("MARKET_INFO_MIGRATION_DATABASE_URL is required")
 	}
 	db, err := open("pgx", databaseURL)
 	if err != nil {

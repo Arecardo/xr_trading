@@ -121,12 +121,13 @@ Asset 1 ────── N Instrument 1 ────── N ProviderInstrumen
 | --- | --- |
 | `id` | UUIDv7，不可变内部映射主键 |
 | `code` | 唯一可读编码，不作为外键 |
-| `provider` | `LONGBRIDGE`、`BYBIT`；后续可增加其他供应商 |
+| `provider_id` | Provider 的 UUID 外键，例如对应 `longbridge`、`bybit` |
 | `instrument_id` | 对应内部交易品种的 UUID 外键 |
 | `external_symbol` | 供应商要求的代码，例如 `NVDA.US`、`BTCUSDT` |
 | `provider_market` | 供应商市场或产品分类，例如 `US`、`spot` |
-| `capabilities` | 支持的能力，例如 `quote`、`kline_1h`、`kline_1d` |
+| `capabilities` | 结构化能力对象，包含 `quote`、`historical` 和支持的 `intervals` |
 | `priority` | 同一交易品种存在多个数据源时的选择优先级 |
+| `is_default` | 是否为该 Instrument 的默认行情来源 |
 | `enabled` | 是否启用采集 |
 | `valid_from` / `valid_to` | 映射有效时间范围 |
 | `metadata` | 供应商专属参数 |
@@ -137,12 +138,17 @@ Asset 1 ────── N Instrument 1 ────── N ProviderInstrumen
 {
   "id": "0197c3cd-65b4-7fd5-b554-af0203194988",
   "code": "provider.bybit.spot.btcusdt",
-  "provider": "BYBIT",
+  "provider_id": "0197c3ce-7a19-7795-b76f-8d011cc9b110",
   "instrument_id": "0197c3ca-13e0-7b7d-8ff1-c6da977b31e2",
   "external_symbol": "BTCUSDT",
   "provider_market": "spot",
-  "capabilities": ["quote", "kline_1h", "kline_1d"],
+  "capabilities": {
+    "quote": true,
+    "historical": true,
+    "intervals": ["1h", "1d"]
+  },
   "priority": 100,
+  "is_default": true,
   "enabled": true
 }
 ```
@@ -160,9 +166,13 @@ Instrument: instrument.nasdaq.equity.nvda
 - 实体 UUID 创建后不可修改，且不得复用。
 - `code` 在同类实体中唯一，统一使用小写点分编码；原则上保持稳定，不作为数据库外键。
 - `Instrument` 必须关联一个有效的 `Asset`。
+- 现货 Instrument 的 `asset_id` 表示 base asset；`quote_asset_id` 可为空，但存在时不得为零或与 base asset 相同，`quote_currency` 始终必填。
+- `price_scale`、`quantity_scale` 范围为 0～18；`lot_size`、`min_quantity` 存在时必须大于零；`market_timezone` 必须是有效 IANA 时区。
 - `ProviderInstrument` 必须关联一个有效的 `Instrument`。
 - 同一 `provider + external_symbol + provider_market` 在同一有效时间范围内只能映射到一个 `Instrument`。
 - 同一 `Instrument` 可以拥有多个供应商映射，但必须明确来源优先级和支持能力。
+- `capabilities.intervals` 只接受首期支持的 interval 且不得重复；未知 capability 字段直接拒绝，避免配置拼写错误被静默忽略。
+- 默认 ProviderInstrument 必须处于启用状态且 `valid_to` 为空；同一 Instrument 的当前默认来源唯一性由数据库部分唯一索引保证。
 - 行情数据必须关联 `instrument_id` 和 `source`，不得只关联 `asset_id`。
 - 基本面、新闻或资产级研究数据可关联 `asset_id`；若数据明确针对某个交易场所，则同时关联 `instrument_id`。
 - 供应商代码变更通过关闭旧映射并创建新映射处理，不改写历史行情身份。

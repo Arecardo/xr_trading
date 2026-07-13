@@ -24,8 +24,8 @@ GET /api/market-info/v1/quotes/latest
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `asset_code` | 条件必填 | 资产可读编码，例如 `BTC`、`AAPL` |
-| `instrument_code` | 条件必填 | 交易标的可读编码，例如 `BTC-USDT.SPOT` |
+| `asset_code` | 条件必填 | 资产稳定可读编码，例如 `asset.crypto.btc`、`asset.equity.us.aapl` |
+| `instrument_code` | 条件必填 | 交易标的稳定可读编码，例如 `instrument.bybit.spot.btc-usdt` |
 | `provider` | 否 | Provider 编码，例如 `bybit` |
 
 `asset_code` 与 `instrument_code` 至少提供一个：
@@ -39,20 +39,20 @@ GET /api/market-info/v1/quotes/latest
 示例：
 
 ```http
-GET /api/market-info/v1/quotes/latest?asset_code=BTC
+GET /api/market-info/v1/quotes/latest?asset_code=asset.crypto.btc
 ```
 
 ```json
 {
   "asset": {
     "asset_id": "019...",
-    "asset_code": "BTC",
+    "asset_code": "asset.crypto.btc",
     "asset_type": "crypto"
   },
   "quotes": [
     {
       "instrument_id": "019...",
-      "instrument_code": "BTC-USDT.SPOT",
+      "instrument_code": "instrument.bybit.spot.btc-usdt",
       "provider": "bybit",
       "provider_instrument_id": "019...",
       "provider_symbol": "BTCUSDT",
@@ -82,16 +82,16 @@ GET /api/market-info/v1/bars
 示例：
 
 ```http
-GET /api/market-info/v1/bars?instrument_code=BTC-USDT.SPOT&provider=bybit&interval=1h&start_time=2026-07-01T00:00:00Z&end_time=2026-07-02T00:00:00Z
+GET /api/market-info/v1/bars?instrument_code=instrument.bybit.spot.btc-usdt&provider=bybit&interval=1h&start_time=2026-07-01T00:00:00Z&end_time=2026-07-02T00:00:00Z
 ```
 
 ```json
 {
   "instrument": {
     "instrument_id": "019...",
-    "instrument_code": "BTC-USDT.SPOT",
-    "base_asset_code": "BTC",
-    "quote_asset_code": "USDT"
+    "instrument_code": "instrument.bybit.spot.btc-usdt",
+    "base_asset_code": "asset.crypto.btc",
+    "quote_asset_code": "asset.cash.usdt"
   },
   "provider": {
     "provider_code": "bybit",
@@ -118,7 +118,7 @@ GET /api/market-info/v1/bars?instrument_code=BTC-USDT.SPOT&provider=bybit&interv
 ### 2.3 Instrument 与 Provider 可选项
 
 ```http
-GET /api/market-info/v1/instruments?asset_code=BTC&enabled=true
+GET /api/market-info/v1/instruments?asset_code=asset.crypto.btc&enabled=true
 ```
 
 该接口为查询页面提供联动选项，响应中包含 Instrument、可用 Provider、是否为默认来源以及支持的周期。前端选择顺序为：
@@ -140,7 +140,7 @@ Asset -> Instrument -> Provider -> Interval
   "items": [
     {
       "instrument_id": "019...",
-      "instrument_code": "BTC-USDT.SPOT",
+      "instrument_code": "instrument.bybit.spot.btc-usdt",
       "display_name": "BTC/USDT",
       "providers": [
         {
@@ -242,7 +242,7 @@ POST /api/market-info/v1/collection-subscriptions
 ```json
 {
   "provider": "bybit",
-  "instrument_code": "BTC-USDT.SPOT",
+  "instrument_code": "instrument.bybit.spot.btc-usdt",
   "interval": "1h",
   "enabled": true,
   "priority": 100,
@@ -282,7 +282,7 @@ POST /api/market-info/v1/ingestion-runs/backfill
 ```json
 {
   "provider": "bybit",
-  "instrument_code": "BTC-USDT.SPOT",
+  "instrument_code": "instrument.bybit.spot.btc-usdt",
   "interval": "1h",
   "start_time": "2026-06-01T00:00:00Z",
   "end_time": "2026-07-01T00:00:00Z",

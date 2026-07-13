@@ -1,7 +1,13 @@
-.PHONY: fmt vet test test-race coverage check db-start db-stop migrate-up
+.PHONY: fmt vet test test-race test-integration coverage check db-start db-stop migrate-up
 
 COVERAGE_MIN ?= 80.0
 COVERAGE_FILE ?= coverage.out
+MARKET_INFO_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_runtime
+MARKET_INFO_MIGRATION_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_owner
+MARKET_INFO_TEST_ADMIN_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable
+export MARKET_INFO_DATABASE_URL
+export MARKET_INFO_MIGRATION_DATABASE_URL
+export MARKET_INFO_TEST_ADMIN_DATABASE_URL
 
 fmt:
 	go fmt ./...
@@ -15,6 +21,9 @@ test:
 test-race:
 	go test -race ./...
 
+test-integration:
+	go test -tags=integration ./...
+
 coverage:
 	go test ./... -covermode=atomic -coverprofile=$(COVERAGE_FILE)
 	@total="$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ { gsub(/%/, "", $$3); print $$3 }')"; \
@@ -26,7 +35,7 @@ coverage:
 check: fmt vet coverage test-race
 
 db-start:
-	docker compose up -d postgres
+	docker compose --env-file .env.example up -d postgres
 
 db-stop:
 	docker compose down

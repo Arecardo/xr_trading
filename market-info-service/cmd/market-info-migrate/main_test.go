@@ -27,7 +27,7 @@ func TestRun(t *testing.T) {
 			lookup:    func(string) (string, bool) { return "", false },
 			open:      sql.Open,
 			migrate:   func(context.Context, *sql.DB) error { return nil },
-			wantError: "DATABASE_URL",
+			wantError: "MIGRATION_DATABASE_URL",
 		},
 		{
 			name:   "open error",
@@ -70,7 +70,7 @@ func TestRun(t *testing.T) {
 }
 
 func TestEntrypointFailsWithoutDatabaseURL(t *testing.T) {
-	t.Setenv("MARKET_INFO_DATABASE_URL", "")
+	t.Setenv("MARKET_INFO_MIGRATION_DATABASE_URL", "")
 	if code := entrypoint(); code != 1 {
 		t.Fatalf("entrypoint() = %d, want 1", code)
 	}
