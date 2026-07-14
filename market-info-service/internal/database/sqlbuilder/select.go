@@ -23,6 +23,16 @@ func Gte(column string, value any) Condition {
 	return Condition{sql: fmt.Sprintf("%s >= ?", column), args: []any{value}}
 }
 
+// Gt builds a column strictly-greater-than predicate.
+func Gt(column string, value any) Condition {
+	return Condition{sql: fmt.Sprintf("%s > ?", column), args: []any{value}}
+}
+
+// Lt builds a column strictly-less-than predicate.
+func Lt(column string, value any) Condition {
+	return Condition{sql: fmt.Sprintf("%s < ?", column), args: []any{value}}
+}
+
 // Lte builds a column less-than-or-equal predicate.
 func Lte(column string, value any) Condition {
 	return Condition{sql: fmt.Sprintf("%s <= ?", column), args: []any{value}}

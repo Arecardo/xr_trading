@@ -241,10 +241,10 @@ ProviderInstrument
 ## 9. 数据一致性与质量原则
 
 - 所有市场时间统一存储为 UTC，同时保留市场时区和日切规则。
-- 行情记录不能只使用 `asset_id + price` 表达，必须同时保留 `instrument_id` 和 `source`。
+- 行情记录不能只使用 `asset_id + price` 表达，必须同时保留 `instrument_id` 和 `provider_instrument_id`。其中 `provider_instrument_id` 是持久化来源身份；API 展示的 `source` 由 Provider 关联生成，不在行情表重复保存自由文本来源。
 - 同一资产在不同交易场所或聚合供应商下的价格具有不同语义，必须分别存储，不得互相覆盖。例如 Bybit `BTCUSDT` 成交价属于具体交易场所行情，CoinGecko BTC 价格属于跨市场聚合参考价。
 - 交易执行、成交能力和订单风控使用目标交易场所的具体交易品种行情；跨市场研究、市场概览和参考估值可按明确规则使用聚合行情。
-- K 线的建议唯一键为 `instrument_id + interval + open_time + source`。
+- K 线的逻辑来源键为 `instrument_id + provider_instrument_id + interval + open_time`；数据库再增加 `revision` 保存修订历史，并以 `is_current` 标记当前版本。
 - 重复采集不得生成重复记录。
 - 已闭合与未闭合 K 线必须明确区分。
 - 数据修订必须记录来源、采集时间和修订信息。
@@ -253,3 +253,5 @@ ProviderInstrument
 - 股票公司行动和复权方式必须作为元数据保留。
 - 加密成交量的 base/quote 单位必须明确记录。
 - 核心价格和数量使用定点十进制，不使用二进制浮点作为持久化标准。
+- 行情查询时间范围统一采用 `[start,end)`；`start` 包含、`end` 排除，避免相邻窗口重复边界 K 线。
+- `is_closed` 表示市场 K 线是否闭合，`is_current` 表示修订版本是否为当前版本，二者不得混用。

@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"xr-trading/market-info-service/internal/api/httpapi"
 	"xr-trading/market-info-service/internal/config"
 	"xr-trading/market-info-service/internal/database/postgres"
 	"xr-trading/market-info-service/internal/server"
@@ -31,6 +34,26 @@ func TestRunServeWiresDependencies(t *testing.T) {
 		serverConfig = cfg
 		if handler == nil {
 			t.Fatal("handler is nil")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		if response.Code != http.StatusOK || !httpapi.ValidRequestID(response.Header().Get(httpapi.RequestIDHeader)) {
+			t.Fatalf("health response is missing request ID: status=%d header=%q", response.Code, response.Header().Get(httpapi.RequestIDHeader))
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/instruments?asset_code=asset.crypto.missing", nil))
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"ASSET_NOT_FOUND"`) {
+			t.Fatalf("instrument options route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/quotes/latest?asset_code=asset.crypto.missing", nil))
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"ASSET_NOT_FOUND"`) {
+			t.Fatalf("latest quotes route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/bars?instrument_code=instrument.crypto.missing&provider=bybit&interval=1h", nil))
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"INSTRUMENT_NOT_FOUND"`) {
+			t.Fatalf("bars route is not wired: status=%d body=%s", response.Code, response.Body.String())
 		}
 		return server.New(cfg, handler)
 	})
@@ -117,8 +140,19 @@ func (s *stubPool) Ping(context.Context) error {
 	return nil
 }
 
-func (s *stubPool) QueryRow(context.Context, string, ...any) pgx.Row {
+func (s *stubPool) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
+	if strings.Contains(query, "core.assets") || strings.Contains(query, "core.instruments") {
+		return stubErrorRow{err: pgx.ErrNoRows}
+	}
 	return stubRow{version: s.version}
+}
+
+func (s *stubPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("query is not expected")
+}
+
+func (s *stubPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, errors.New("exec is not expected")
 }
 
 func (s *stubPool) Close() {
@@ -132,4 +166,12 @@ type stubRow struct {
 func (s stubRow) Scan(dest ...any) error {
 	*(dest[0].(*int64)) = s.version
 	return nil
+}
+
+type stubErrorRow struct {
+	err error
+}
+
+func (s stubErrorRow) Scan(...any) error {
+	return s.err
 }

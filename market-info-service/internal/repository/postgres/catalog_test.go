@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
+	"xr-trading/market-info-service/internal/application"
 	"xr-trading/market-info-service/internal/domain"
 )
 
@@ -286,6 +288,9 @@ func TestCatalogRepositoryMapsErrorsAndRejectsInvalidIDs(t *testing.T) {
 	if _, err := repository.FindAssetByCode(context.Background(), "missing"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("FindAssetByCode() error = %v", err)
 	}
+	if _, err := repository.FindAssetByID(context.Background(), domain.ID{}); !errors.Is(err, domain.ErrInvalidData) {
+		t.Fatalf("FindAssetByID(zero) error = %v", err)
+	}
 	if err := repository.CreateProvider(context.Background(), domain.Provider{}); !errors.Is(err, domain.ErrInvalidData) {
 		t.Fatalf("CreateProvider(zero) error = %v", err)
 	}
@@ -302,6 +307,110 @@ func TestCatalogRepositoryMapsErrorsAndRejectsInvalidIDs(t *testing.T) {
 	}
 	if _, err := repository.ListActiveProviderInstruments(context.Background(), domain.IDFromUUID(uuid.New())); !errors.Is(err, domain.ErrDatabaseUnavailable) {
 		t.Fatalf("ListActiveProviderInstruments(unavailable) error = %v", err)
+	}
+}
+
+func TestCatalogRepositoryFindsAssetByID(t *testing.T) {
+	id := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160f")
+	now := time.Now().UTC()
+	database := fakeCatalogDatabase{queryRow: func(_ context.Context, query string, args ...any) pgx.Row {
+		if !strings.Contains(query, "WHERE id = $1") || len(args) != 1 || args[0] != id {
+			t.Fatalf("FindAssetByID query=%q args=%#v", query, args)
+		}
+		return scanFunc(func(destinations ...any) error {
+			*destinations[0].(*uuid.UUID) = id
+			*destinations[1].(*string) = "asset.crypto.btc"
+			*destinations[2].(*string) = "CRYPTO"
+			*destinations[3].(*string) = "BTC"
+			*destinations[4].(*string) = "Bitcoin"
+			*destinations[5].(*string) = "active"
+			*destinations[6].(*[]byte) = []byte(`{}`)
+			*destinations[7].(*time.Time) = now
+			*destinations[8].(*time.Time) = now
+			return nil
+		})
+	}}
+	repository, _ := newCatalogRepository(database)
+	asset, err := repository.FindAssetByID(context.Background(), domain.IDFromUUID(id))
+	if err != nil || asset.ID.UUID() != id {
+		t.Fatalf("FindAssetByID() = (%#v, %v)", asset, err)
+	}
+}
+
+func TestCatalogRepositoryListsInstrumentProviderOptions(t *testing.T) {
+	now := time.Date(2026, time.July, 15, 8, 0, 0, 0, time.UTC)
+	assetID := domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160f"))
+	instrumentID := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160d")
+	mappingID := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160c")
+	after := testCode(t, "instrument.crypto.btc-usdc")
+	rows := &fakeRows{rows: []scanFunc{func(destinations ...any) error {
+		*destinations[0].(*uuid.UUID) = instrumentID
+		*destinations[1].(*string) = "instrument.crypto.btc-usdt"
+		*destinations[2].(*string) = "BTC/USDT"
+		*destinations[3].(*uuid.UUID) = mappingID
+		*destinations[4].(*string) = "provider.bybit.btc-usdt"
+		*destinations[5].(*string) = "bybit"
+		*destinations[6].(*string) = "Bybit"
+		*destinations[7].(*bool) = true
+		*destinations[8].(*int16) = 10
+		*destinations[9].(*[]byte) = []byte(`{"historical":true,"intervals":["1h","1d"]}`)
+		return nil
+	}}}
+	database := fakeCatalogDatabase{
+		query: func(_ context.Context, query string, args ...any) (pgx.Rows, error) {
+			if !strings.Contains(query, "WITH selected_instruments") || !strings.Contains(query, "provider.status IN ('active', 'degraded')") || !strings.Contains(query, "mapping.valid_to > $2") {
+				t.Fatalf("query does not contain active/effective projection: %s", query)
+			}
+			if len(args) != 4 || args[0] != assetID.UUID() || args[1] != now || args[2] != after.String() || args[3] != 11 {
+				t.Fatalf("query args = %#v", args)
+			}
+			return rows, nil
+		},
+	}
+	repository, _ := newCatalogRepository(database)
+	records, err := repository.ListInstrumentProviderOptions(context.Background(), application.InstrumentOptionsFilter{
+		AssetID: assetID, AfterInstrumentCode: &after, EffectiveAt: now, InstrumentLimit: 11,
+	})
+	if err != nil {
+		t.Fatalf("ListInstrumentProviderOptions() error = %v", err)
+	}
+	if len(records) != 1 || records[0].InstrumentID.UUID() != instrumentID || records[0].ProviderInstrumentID.UUID() != mappingID || records[0].ProviderCode.String() != "bybit" || len(records[0].Capabilities.Intervals) != 2 || !rows.closed {
+		t.Fatalf("ListInstrumentProviderOptions() = %#v, closed=%t", records, rows.closed)
+	}
+}
+
+func TestCatalogRepositoryInstrumentProviderOptionsFailures(t *testing.T) {
+	now := time.Now().UTC()
+	assetID := domain.IDFromUUID(uuid.New())
+	repository, _ := newCatalogRepository(fakeCatalogDatabase{})
+	for _, filter := range []application.InstrumentOptionsFilter{
+		{},
+		{AssetID: assetID, EffectiveAt: now, InstrumentLimit: 0},
+		{AssetID: assetID, EffectiveAt: now, InstrumentLimit: application.MaximumInstrumentOptionsPageSize + 2},
+	} {
+		if _, err := repository.ListInstrumentProviderOptions(context.Background(), filter); !errors.Is(err, domain.ErrInvalidData) {
+			t.Fatalf("ListInstrumentProviderOptions(%#v) error = %v", filter, err)
+		}
+	}
+
+	databaseError := &pgconn.PgError{Code: "08006"}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) {
+		return nil, databaseError
+	}})
+	if _, err := repository.ListInstrumentProviderOptions(context.Background(), application.InstrumentOptionsFilter{AssetID: assetID, EffectiveAt: now, InstrumentLimit: 10}); !errors.Is(err, domain.ErrDatabaseUnavailable) {
+		t.Fatalf("ListInstrumentProviderOptions(query error) = %v", err)
+	}
+
+	badRows := &fakeRows{rows: []scanFunc{func(...any) error { return errors.New("scan") }}}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) { return badRows, nil }})
+	if _, err := repository.ListInstrumentProviderOptions(context.Background(), application.InstrumentOptionsFilter{AssetID: assetID, EffectiveAt: now, InstrumentLimit: 10}); err == nil || !strings.Contains(err.Error(), "scan instrument provider option") {
+		t.Fatalf("ListInstrumentProviderOptions(scan error) = %v", err)
+	}
+
+	iterationRows := &fakeRows{err: databaseError}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) { return iterationRows, nil }})
+	if _, err := repository.ListInstrumentProviderOptions(context.Background(), application.InstrumentOptionsFilter{AssetID: assetID, EffectiveAt: now, InstrumentLimit: 10}); !errors.Is(err, domain.ErrDatabaseUnavailable) {
+		t.Fatalf("ListInstrumentProviderOptions(iteration error) = %v", err)
 	}
 }
 

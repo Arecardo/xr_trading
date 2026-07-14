@@ -10,9 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"xr-trading/market-info-service/internal/application"
 	"xr-trading/market-info-service/internal/database/sqlbuilder"
 	"xr-trading/market-info-service/internal/domain"
 )
@@ -20,28 +20,158 @@ import (
 // CatalogRepository reads entities from the core catalog and stores provider
 // configuration in market_data.
 type CatalogRepository struct {
-	pool catalogDatabase
+	pool CatalogDatabase
 }
 
-type catalogDatabase interface {
+// CatalogDatabase is the narrow pgx contract used by catalog reads and
+// configuration writes. It keeps runtime assembly testable without exposing a
+// concrete connection-pool implementation to the application entrypoint.
+type CatalogDatabase interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+// catalogDatabase remains the package-local name used by the other
+// PostgreSQL repositories that share this pgx contract.
+type catalogDatabase = CatalogDatabase
+
 // NewCatalogRepository constructs a catalog repository over pool.
-func NewCatalogRepository(pool *pgxpool.Pool) (*CatalogRepository, error) {
+func NewCatalogRepository(pool CatalogDatabase) (*CatalogRepository, error) {
 	if pool == nil {
 		return nil, errors.New("PostgreSQL pool is required")
 	}
 	return newCatalogRepository(pool)
 }
 
-func newCatalogRepository(pool catalogDatabase) (*CatalogRepository, error) {
+func newCatalogRepository(pool CatalogDatabase) (*CatalogRepository, error) {
 	if pool == nil {
 		return nil, errors.New("PostgreSQL pool is required")
 	}
 	return &CatalogRepository{pool: pool}, nil
+}
+
+// ListInstrumentProviderOptions returns a flattened, read-optimized page. The
+// CTE limits Instruments before joining Provider rows, so an Instrument is
+// never split across pages.
+func (repository *CatalogRepository) ListInstrumentProviderOptions(ctx context.Context, filter application.InstrumentOptionsFilter) ([]application.InstrumentProviderOptionRecord, error) {
+	if filter.AssetID.IsZero() || filter.EffectiveAt.IsZero() || filter.InstrumentLimit <= 0 || filter.InstrumentLimit > application.MaximumInstrumentOptionsPageSize+1 {
+		return nil, fmt.Errorf("list instrument provider options: %w", domain.ErrInvalidData)
+	}
+	afterCode := ""
+	if filter.AfterInstrumentCode != nil {
+		afterCode = filter.AfterInstrumentCode.String()
+		if afterCode == "" {
+			return nil, fmt.Errorf("list instrument provider options: %w", domain.ErrInvalidData)
+		}
+	}
+
+	rows, err := repository.pool.Query(ctx, `
+WITH selected_instruments AS (
+    SELECT
+        i.id,
+        i.code,
+        COALESCE(NULLIF(i.metadata ->> 'display_name', ''), i.symbol) AS display_name
+    FROM core.instruments AS i
+    WHERE i.asset_id = $1
+      AND i.status = 'active'
+      AND (i.valid_from IS NULL OR i.valid_from <= $2)
+      AND (i.valid_to IS NULL OR i.valid_to > $2)
+      AND ($3::text = '' OR i.code > $3)
+      AND EXISTS (
+          SELECT 1
+          FROM market_data.provider_instruments AS available_mapping
+          JOIN market_data.providers AS available_provider
+            ON available_provider.id = available_mapping.provider_id
+          WHERE available_mapping.instrument_id = i.id
+            AND available_mapping.enabled = true
+            AND (available_mapping.valid_from IS NULL OR available_mapping.valid_from <= $2)
+            AND (available_mapping.valid_to IS NULL OR available_mapping.valid_to > $2)
+            AND available_provider.status IN ('active', 'degraded')
+      )
+    ORDER BY i.code ASC
+    LIMIT $4
+)
+SELECT
+    selected.id,
+    selected.code,
+    selected.display_name,
+    mapping.id,
+    mapping.code,
+    provider.code,
+    provider.name,
+    mapping.is_default,
+    mapping.priority,
+    mapping.capabilities
+FROM selected_instruments AS selected
+JOIN market_data.provider_instruments AS mapping
+  ON mapping.instrument_id = selected.id
+JOIN market_data.providers AS provider
+  ON provider.id = mapping.provider_id
+WHERE mapping.enabled = true
+  AND (mapping.valid_from IS NULL OR mapping.valid_from <= $2)
+  AND (mapping.valid_to IS NULL OR mapping.valid_to > $2)
+  AND provider.status IN ('active', 'degraded')
+ORDER BY
+    selected.code ASC,
+    mapping.is_default DESC,
+    mapping.priority ASC,
+    provider.code ASC,
+    mapping.code ASC`, IDToDatabase(filter.AssetID), TimeToDatabase(filter.EffectiveAt), afterCode, filter.InstrumentLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list instrument provider options: %w", MapError(err))
+	}
+	defer rows.Close()
+
+	records := make([]application.InstrumentProviderOptionRecord, 0)
+	for rows.Next() {
+		record, scanErr := scanInstrumentProviderOptionRecord(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan instrument provider option: %w", scanErr)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate instrument provider options: %w", MapError(err))
+	}
+	return records, nil
+}
+
+func scanInstrumentProviderOptionRecord(row scanner) (application.InstrumentProviderOptionRecord, error) {
+	var record application.InstrumentProviderOptionRecord
+	var instrumentID, providerInstrumentID uuid.UUID
+	var instrumentCode, providerInstrumentCode, providerCode string
+	var capabilities []byte
+	if err := row.Scan(
+		&instrumentID, &instrumentCode, &record.InstrumentDisplayName,
+		&providerInstrumentID, &providerInstrumentCode, &providerCode, &record.ProviderDisplayName,
+		&record.IsDefault, &record.Priority, &capabilities,
+	); err != nil {
+		return application.InstrumentProviderOptionRecord{}, err
+	}
+	parsedInstrumentCode, err := domain.ParseCode(instrumentCode)
+	if err != nil {
+		return application.InstrumentProviderOptionRecord{}, err
+	}
+	parsedProviderInstrumentCode, err := domain.ParseCode(providerInstrumentCode)
+	if err != nil {
+		return application.InstrumentProviderOptionRecord{}, err
+	}
+	parsedProviderCode, err := domain.ParseCode(providerCode)
+	if err != nil {
+		return application.InstrumentProviderOptionRecord{}, err
+	}
+	parsedCapabilities, err := domain.ParseProviderCapabilities(capabilities)
+	if err != nil {
+		return application.InstrumentProviderOptionRecord{}, err
+	}
+	record.InstrumentID = IDFromDatabase(instrumentID)
+	record.InstrumentCode = parsedInstrumentCode
+	record.ProviderInstrumentID = IDFromDatabase(providerInstrumentID)
+	record.ProviderInstrumentCode = parsedProviderInstrumentCode
+	record.ProviderCode = parsedProviderCode
+	record.Capabilities = parsedCapabilities
+	return record, nil
 }
 
 // FindAssetByCode returns a core Asset identified by its stable readable code.
@@ -53,6 +183,22 @@ func (repository *CatalogRepository) FindAssetByCode(ctx context.Context, code s
 	asset, err := scanAsset(repository.pool.QueryRow(ctx, query, args...))
 	if err != nil {
 		return domain.Asset{}, fmt.Errorf("find asset by code: %w", MapError(err))
+	}
+	return asset, nil
+}
+
+// FindAssetByID returns a core Asset for an Instrument relationship.
+func (repository *CatalogRepository) FindAssetByID(ctx context.Context, id domain.ID) (domain.Asset, error) {
+	if id.IsZero() {
+		return domain.Asset{}, fmt.Errorf("find asset by ID: %w", domain.ErrInvalidData)
+	}
+	query, args, err := sqlbuilder.Select(assetColumns...).From("core.assets").Where(sqlbuilder.Eq("id", IDToDatabase(id))).Build()
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("build asset query: %w", err)
+	}
+	asset, err := scanAsset(repository.pool.QueryRow(ctx, query, args...))
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("find asset by ID: %w", MapError(err))
 	}
 	return asset, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"xr-trading/market-info-service/internal/application"
 	poolpostgres "xr-trading/market-info-service/internal/database/postgres"
 	"xr-trading/market-info-service/internal/domain"
 	repositorypostgres "xr-trading/market-info-service/internal/repository/postgres"
@@ -120,6 +121,17 @@ func TestDB010CatalogAndProviderRepositoryAgainstPostgres(t *testing.T) {
 	}
 	if len(mappings) != 2 || !mappings[0].IsDefault || mappings[0].ID != defaultMapping.ID || mappings[1].ID != secondMapping.ID {
 		t.Fatalf("ListActiveProviderInstruments() = %#v", mappings)
+	}
+	optionsService, err := application.NewInstrumentOptionsService(repository, repository, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("NewInstrumentOptionsService() error = %v", err)
+	}
+	options, err := optionsService.List(ctx, application.InstrumentOptionsInput{AssetCode: assetCode, Limit: 10})
+	if err != nil {
+		t.Fatalf("InstrumentOptionsService.List() error = %v", err)
+	}
+	if len(options.Items) != 1 || options.Items[0].ID != instrumentID || len(options.Items[0].Providers) != 1 || options.Items[0].Providers[0].Code != provider.Code || !options.Items[0].Providers[0].IsDefault || len(options.Items[0].Providers[0].SupportedIntervals) != 2 {
+		t.Fatalf("InstrumentOptionsService.List() = %#v", options)
 	}
 	if _, err := repository.ListActiveProviderInstruments(ctx, domain.ID{}); !errors.Is(err, domain.ErrInvalidData) {
 		t.Fatalf("ListActiveProviderInstruments(zero) error = %v, want invalid data", err)

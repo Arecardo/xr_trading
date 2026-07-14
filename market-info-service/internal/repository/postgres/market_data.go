@@ -90,11 +90,12 @@ func newMarketDataRepository(database marketDataDatabase) (*MarketDataRepository
 // UpsertLatestQuote inserts a new source-specific quote or replaces it only
 // when marketTime is newer. It returns false for an older or equal snapshot.
 func (repository *MarketDataRepository) UpsertLatestQuote(ctx context.Context, quote domain.LatestQuote) (bool, error) {
-	if quote.InstrumentID.IsZero() || quote.ProviderInstrumentID.IsZero() || quote.MarketTime.IsZero() {
-		return false, fmt.Errorf("upsert latest quote: %w", domain.ErrInvalidData)
+	quote, err := domain.NewQuote(quote)
+	if err != nil {
+		return false, fmt.Errorf("upsert latest quote: %w", err)
 	}
 	var storedTime time.Time
-	err := repository.database.QueryRow(ctx, `
+	err = repository.database.QueryRow(ctx, `
 INSERT INTO market_data.latest_quotes (
     instrument_id, provider_instrument_id, market_time, last_price, bid_price, bid_size,
     ask_price, ask_size, open_24h, high_24h, low_24h, base_volume_24h,
@@ -152,6 +153,10 @@ func (repository *MarketDataRepository) ListLatestQuotes(ctx context.Context, in
 // WriteMarketBar atomically preserves an unchanged current bar or writes a
 // new revision after closing the prior current revision.
 func (repository *MarketDataRepository) WriteMarketBar(ctx context.Context, bar domain.MarketBar) (domain.MarketBarWriteResult, error) {
+	bar, err := domain.NewBar(bar)
+	if err != nil {
+		return domain.MarketBarWriteResult{}, fmt.Errorf("write market bar: %w", err)
+	}
 	if err := validateMarketBar(bar); err != nil {
 		return domain.MarketBarWriteResult{}, err
 	}
@@ -173,7 +178,7 @@ func (repository *MarketDataRepository) WriteMarketBar(ctx context.Context, bar 
 		revision = current.Revision + 1
 		if _, err := tx.Exec(ctx, `UPDATE market_data.market_bars SET is_current = false
 WHERE instrument_id = $1 AND provider_instrument_id = $2 AND interval = $3 AND open_time = $4 AND revision = $5 AND is_current = true`,
-			IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), bar.Interval, TimeToDatabase(bar.OpenTime), current.Revision); err != nil {
+			IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), string(bar.Interval), TimeToDatabase(bar.OpenTime.Time()), current.Revision); err != nil {
 			return domain.MarketBarWriteResult{}, fmt.Errorf("close current market bar: %w", MapError(err))
 		}
 	}
@@ -191,8 +196,8 @@ WHERE instrument_id = $1 AND provider_instrument_id = $2 AND interval = $3 AND o
 // ListCurrentMarketBars returns one ProviderInstrument's current revisions in
 // reverse chronological order. Both source identity fields are mandatory.
 func (repository *MarketDataRepository) ListCurrentMarketBars(ctx context.Context, filter domain.MarketBarFilter) ([]domain.MarketBar, error) {
-	if filter.InstrumentID.IsZero() || filter.ProviderInstrumentID.IsZero() || filter.Interval == "" {
-		return nil, fmt.Errorf("list current market bars: %w", domain.ErrInvalidData)
+	if err := filter.Validate(); err != nil {
+		return nil, fmt.Errorf("list current market bars: %w", err)
 	}
 	limit, err := marketBarPageLimit(filter.Limit)
 	if err != nil {
@@ -203,14 +208,14 @@ func (repository *MarketDataRepository) ListCurrentMarketBars(ctx context.Contex
 		And(sqlbuilder.Eq("provider_instrument_id", IDToDatabase(filter.ProviderInstrumentID))).
 		And(sqlbuilder.Eq("interval", filter.Interval)).
 		And(sqlbuilder.Raw("is_current = true"))
-	if filter.StartAt != nil {
-		builder.And(sqlbuilder.Gte("open_time", TimeToDatabase(*filter.StartAt)))
+	if filter.Range.Start != nil {
+		builder.And(sqlbuilder.Gte("open_time", TimeToDatabase(filter.Range.Start.Time())))
 	}
-	if filter.EndAt != nil {
-		builder.And(sqlbuilder.Lte("open_time", TimeToDatabase(*filter.EndAt)))
+	if filter.Range.End != nil {
+		builder.And(sqlbuilder.Lt("open_time", TimeToDatabase(filter.Range.End.Time())))
 	}
 	if filter.BeforeOpenTime != nil {
-		builder.And(sqlbuilder.Raw("open_time < ?", TimeToDatabase(*filter.BeforeOpenTime)))
+		builder.And(sqlbuilder.Lt("open_time", TimeToDatabase(filter.BeforeOpenTime.Time())))
 	}
 	query, args, err := builder.OrderBy("open_time DESC").Limit(limit).Build()
 	if err != nil {
@@ -243,50 +248,110 @@ instrument_id, provider_instrument_id, interval, open_time, revision, close_time
 ) VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric, $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20::jsonb)`
 
 func loadCurrentMarketBar(ctx context.Context, tx marketDataTransaction, bar domain.MarketBar) (domain.MarketBar, error) {
-	row := tx.QueryRow(ctx, "SELECT "+joinColumns(marketBarColumns)+" FROM market_data.market_bars WHERE instrument_id = $1 AND provider_instrument_id = $2 AND interval = $3 AND open_time = $4 AND is_current = true FOR UPDATE", IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), bar.Interval, TimeToDatabase(bar.OpenTime))
+	row := tx.QueryRow(ctx, "SELECT "+joinColumns(marketBarColumns)+" FROM market_data.market_bars WHERE instrument_id = $1 AND provider_instrument_id = $2 AND interval = $3 AND open_time = $4 AND is_current = true FOR UPDATE", IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), string(bar.Interval), TimeToDatabase(bar.OpenTime.Time()))
 	return scanMarketBar(row)
 }
 
 func quoteArguments(quote domain.LatestQuote) []any {
-	return []any{IDToDatabase(quote.InstrumentID), IDToDatabase(quote.ProviderInstrumentID), TimeToDatabase(quote.MarketTime), DecimalToDatabase(quote.LastPrice), optionalDecimalToDatabase(quote.BidPrice), optionalDecimalToDatabase(quote.BidSize), optionalDecimalToDatabase(quote.AskPrice), optionalDecimalToDatabase(quote.AskSize), optionalDecimalToDatabase(quote.Open24H), optionalDecimalToDatabase(quote.High24H), optionalDecimalToDatabase(quote.Low24H), optionalDecimalToDatabase(quote.BaseVolume24H), optionalDecimalToDatabase(quote.QuoteVolume24H), quote.QualityStatus, TimeToDatabase(quote.CollectedAt), jsonValue(quote.Metadata)}
+	return []any{IDToDatabase(quote.InstrumentID), IDToDatabase(quote.ProviderInstrumentID), TimeToDatabase(quote.MarketTime.Time()), DecimalToDatabase(quote.LastPrice.Exact()), optionalDecimalToDatabase(quote.BidPrice), optionalDecimalToDatabase(quote.BidSize), optionalDecimalToDatabase(quote.AskPrice), optionalDecimalToDatabase(quote.AskSize), optionalDecimalToDatabase(quote.Open24H), optionalDecimalToDatabase(quote.High24H), optionalDecimalToDatabase(quote.Low24H), optionalDecimalToDatabase(quote.BaseVolume24H), optionalDecimalToDatabase(quote.QuoteVolume24H), string(quote.QualityStatus), TimeToDatabase(quote.CollectedAt.Time()), jsonValue(quote.Metadata)}
 }
 
 func marketBarArguments(bar domain.MarketBar) []any {
-	return []any{IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), bar.Interval, TimeToDatabase(bar.OpenTime), bar.Revision, TimeToDatabase(bar.CloseTime), DecimalToDatabase(bar.OpenPrice), DecimalToDatabase(bar.HighPrice), DecimalToDatabase(bar.LowPrice), DecimalToDatabase(bar.ClosePrice), optionalDecimalToDatabase(bar.BaseVolume), optionalDecimalToDatabase(bar.QuoteVolume), bar.TradeCount, bar.IsClosed, bar.IsCurrent, bar.QualityStatus, optionalTimeToDatabase(bar.ProviderUpdatedAt), TimeToDatabase(bar.CollectedAt), nullableString(bar.RawHash), jsonValue(bar.Metadata)}
+	return []any{IDToDatabase(bar.InstrumentID), IDToDatabase(bar.ProviderInstrumentID), string(bar.Interval), TimeToDatabase(bar.OpenTime.Time()), bar.Revision, TimeToDatabase(bar.CloseTime.Time()), DecimalToDatabase(bar.OpenPrice.Exact()), DecimalToDatabase(bar.HighPrice.Exact()), DecimalToDatabase(bar.LowPrice.Exact()), DecimalToDatabase(bar.ClosePrice.Exact()), optionalDecimalToDatabase(bar.BaseVolume), optionalDecimalToDatabase(bar.QuoteVolume), bar.TradeCount, bar.IsClosed, bar.IsCurrent, string(bar.QualityStatus), optionalInstantToDatabase(bar.ProviderUpdatedAt), TimeToDatabase(bar.CollectedAt.Time()), nullableString(bar.RawHash), jsonValue(bar.Metadata)}
 }
 
 func scanLatestQuote(row scanner) (domain.LatestQuote, error) {
-	var quote domain.LatestQuote
+	var marketTime, collectedAt time.Time
+	var lastPrice decimal.Decimal
+	var bidPrice, bidSize, askPrice, askSize *decimal.Decimal
+	var open24H, high24H, low24H, baseVolume24H, quoteVolume24H *decimal.Decimal
+	var qualityStatus string
 	var instrumentID, providerInstrumentID uuid.UUID
 	var metadata []byte
-	if err := row.Scan(&instrumentID, &providerInstrumentID, &quote.MarketTime, &quote.LastPrice, &quote.BidPrice, &quote.BidSize, &quote.AskPrice, &quote.AskSize, &quote.Open24H, &quote.High24H, &quote.Low24H, &quote.BaseVolume24H, &quote.QuoteVolume24H, &quote.QualityStatus, &quote.CollectedAt, &metadata); err != nil {
+	if err := row.Scan(&instrumentID, &providerInstrumentID, &marketTime, &lastPrice, &bidPrice, &bidSize, &askPrice, &askSize, &open24H, &high24H, &low24H, &baseVolume24H, &quoteVolume24H, &qualityStatus, &collectedAt, &metadata); err != nil {
 		return domain.LatestQuote{}, err
 	}
-	quote.InstrumentID, quote.ProviderInstrumentID = IDFromDatabase(instrumentID), IDFromDatabase(providerInstrumentID)
-	quote.MarketTime, quote.CollectedAt, quote.Metadata = TimeToDatabase(quote.MarketTime), TimeToDatabase(quote.CollectedAt), copyJSON(metadata)
-	return quote, nil
+	parsedMarketTime, err := domain.NewUTCInstant(marketTime)
+	if err != nil {
+		return domain.LatestQuote{}, err
+	}
+	parsedCollectedAt, err := domain.NewUTCInstant(collectedAt)
+	if err != nil {
+		return domain.LatestQuote{}, err
+	}
+	parsedQuality, err := domain.ParseQualityStatus(qualityStatus)
+	if err != nil {
+		return domain.LatestQuote{}, err
+	}
+	return domain.NewQuote(domain.Quote{
+		InstrumentID: IDFromDatabase(instrumentID), ProviderInstrumentID: IDFromDatabase(providerInstrumentID),
+		MarketTime: parsedMarketTime, LastPrice: domain.DecimalFromExact(lastPrice),
+		BidPrice: optionalDecimalFromDatabase(bidPrice), BidSize: optionalDecimalFromDatabase(bidSize),
+		AskPrice: optionalDecimalFromDatabase(askPrice), AskSize: optionalDecimalFromDatabase(askSize),
+		Open24H: optionalDecimalFromDatabase(open24H), High24H: optionalDecimalFromDatabase(high24H),
+		Low24H: optionalDecimalFromDatabase(low24H), BaseVolume24H: optionalDecimalFromDatabase(baseVolume24H),
+		QuoteVolume24H: optionalDecimalFromDatabase(quoteVolume24H), QualityStatus: parsedQuality,
+		CollectedAt: parsedCollectedAt, Metadata: copyJSON(metadata),
+	})
 }
 
 func scanMarketBar(row scanner) (domain.MarketBar, error) {
-	var bar domain.MarketBar
+	var interval, qualityStatus string
+	var openTime, closeTime, collectedAt time.Time
+	var providerUpdatedAt *time.Time
+	var openPrice, highPrice, lowPrice, closePrice decimal.Decimal
+	var baseVolume, quoteVolume *decimal.Decimal
+	var revision int
+	var tradeCount *int64
+	var isClosed, isCurrent bool
 	var instrumentID, providerInstrumentID uuid.UUID
 	var metadata []byte
 	var rawHash *string
-	if err := row.Scan(&instrumentID, &providerInstrumentID, &bar.Interval, &bar.OpenTime, &bar.Revision, &bar.CloseTime, &bar.OpenPrice, &bar.HighPrice, &bar.LowPrice, &bar.ClosePrice, &bar.BaseVolume, &bar.QuoteVolume, &bar.TradeCount, &bar.IsClosed, &bar.IsCurrent, &bar.QualityStatus, &bar.ProviderUpdatedAt, &bar.CollectedAt, &rawHash, &metadata); err != nil {
+	if err := row.Scan(&instrumentID, &providerInstrumentID, &interval, &openTime, &revision, &closeTime, &openPrice, &highPrice, &lowPrice, &closePrice, &baseVolume, &quoteVolume, &tradeCount, &isClosed, &isCurrent, &qualityStatus, &providerUpdatedAt, &collectedAt, &rawHash, &metadata); err != nil {
 		return domain.MarketBar{}, err
 	}
-	bar.InstrumentID, bar.ProviderInstrumentID = IDFromDatabase(instrumentID), IDFromDatabase(providerInstrumentID)
-	bar.OpenTime, bar.CloseTime, bar.CollectedAt, bar.Metadata = TimeToDatabase(bar.OpenTime), TimeToDatabase(bar.CloseTime), TimeToDatabase(bar.CollectedAt), copyJSON(metadata)
-	bar.ProviderUpdatedAt = optionalTimeFromDatabase(bar.ProviderUpdatedAt)
+	parsedInterval, err := domain.ParseBarInterval(interval)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	parsedOpenTime, err := domain.NewUTCInstant(openTime)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	parsedCloseTime, err := domain.NewUTCInstant(closeTime)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	parsedCollectedAt, err := domain.NewUTCInstant(collectedAt)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	parsedProviderUpdatedAt, err := optionalInstantFromDatabase(providerUpdatedAt)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	parsedQuality, err := domain.ParseQualityStatus(qualityStatus)
+	if err != nil {
+		return domain.MarketBar{}, err
+	}
+	bar := domain.Bar{
+		InstrumentID: IDFromDatabase(instrumentID), ProviderInstrumentID: IDFromDatabase(providerInstrumentID),
+		Interval: parsedInterval, OpenTime: parsedOpenTime, Revision: revision, CloseTime: parsedCloseTime,
+		OpenPrice: domain.DecimalFromExact(openPrice), HighPrice: domain.DecimalFromExact(highPrice),
+		LowPrice: domain.DecimalFromExact(lowPrice), ClosePrice: domain.DecimalFromExact(closePrice),
+		BaseVolume: optionalDecimalFromDatabase(baseVolume), QuoteVolume: optionalDecimalFromDatabase(quoteVolume),
+		TradeCount: tradeCount, IsClosed: isClosed, IsCurrent: isCurrent, QualityStatus: parsedQuality,
+		ProviderUpdatedAt: parsedProviderUpdatedAt, CollectedAt: parsedCollectedAt, Metadata: copyJSON(metadata),
+	}
 	if rawHash != nil {
 		bar.RawHash = *rawHash
 	}
-	return bar, nil
+	return domain.NewStoredBar(bar)
 }
 
 func validateMarketBar(bar domain.MarketBar) error {
-	if bar.InstrumentID.IsZero() || bar.ProviderInstrumentID.IsZero() || bar.Interval == "" || bar.OpenTime.IsZero() || bar.CloseTime.IsZero() || bar.CollectedAt.IsZero() {
-		return fmt.Errorf("write market bar: %w", domain.ErrInvalidData)
+	if _, err := domain.NewBar(bar); err != nil {
+		return fmt.Errorf("write market bar: %w", err)
 	}
 	return nil
 }
@@ -299,11 +364,27 @@ func marketBarPageLimit(value int) (int, error) {
 	}
 	return value, nil
 }
-func optionalDecimalToDatabase(value *decimal.Decimal) any {
+func optionalDecimalToDatabase(value *domain.Decimal) any {
 	if value == nil {
 		return nil
 	}
-	return DecimalToDatabase(*value)
+	return DecimalToDatabase(value.Exact())
+}
+func optionalInstantFromDatabase(value *time.Time) (*domain.UTCInstant, error) {
+	if value == nil {
+		return nil, nil
+	}
+	converted, err := domain.NewUTCInstant(*value)
+	if err != nil {
+		return nil, err
+	}
+	return &converted, nil
+}
+func optionalInstantToDatabase(value *domain.UTCInstant) any {
+	if value == nil {
+		return nil
+	}
+	return TimeToDatabase(value.Time())
 }
 func nullableString(value string) any {
 	if value == "" {

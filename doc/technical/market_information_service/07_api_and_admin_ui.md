@@ -9,8 +9,11 @@
 - 每条行情都保留 `instrument_id`、`provider_instrument_id` 和 `source`，不同来源的数据不隐式合并或互相覆盖。
 - 服务内部和数据库关系使用 UUID；对外查询同时支持稳定、可读的业务编码。
 - 时间统一使用 UTC ISO 8601 格式；价格、成交量等 decimal 字段使用字符串序列化，避免浮点精度损失。
-- 列表接口统一采用游标分页；所有写操作均需鉴权并记录操作人和审计上下文。
+- 列表接口原则上采用游标分页；最新行情接口返回按 Asset/Instrument 映射自然有界的多来源快照集合，首期不分页。所有写操作均需鉴权并记录操作人和审计上下文。
 - API 版本首期统一使用 `/api/market-info/v1` 前缀。
+- JSON 请求体只允许一个 JSON 值、拒绝未知字段，默认大小上限为 1 MiB；超过端点定义的上限返回 `400 INVALID_ARGUMENT`。
+- Request ID 使用 `req_<UUIDv7>`。调用方提供合法值时沿用，否则服务重新生成；所有响应均通过 `X-Request-ID` 返回。
+- 游标是带版本和查询 scope 的 URL-safe 不透明值，只能传回生成它的同一类查询，调用方不得解析、修改或跨接口复用。
 
 ## 2. 公共行情查询 API
 
@@ -32,9 +35,15 @@ GET /api/market-info/v1/quotes/latest
 
 - 只传 `asset_code` 时，返回该资产下所有可用 Instrument 和 Provider 的最新行情列表。
 - 传 `instrument_code` 时，返回该 Instrument 的全部可用来源。
+- 同时传 `asset_code` 与 `instrument_code` 时，Instrument 必须属于该 Asset，否则返回 `400 INVALID_ARGUMENT`。
 - 同时传 `provider` 时，进一步限定到指定来源。
 - 多来源结果是相互独立的行情，不代表计价币、市场口径和用途相同。
-- 没有匹配行情时返回 `200` 和空 `quotes`；参数格式、编码组合或 Provider 非法时返回 `400`。
+- ProviderInstrument 必须启用、具备 quote capability 且位于 `[valid_from, valid_to)` 有效期内；Provider 为 `active` 或 `degraded` 时可查询，`disabled` 时返回空结果。
+- 已知 Asset/Instrument 但没有匹配行情时返回 `200` 和空 `quotes`；未知 Asset/Instrument 分别返回 `404 ASSET_NOT_FOUND` / `404 INSTRUMENT_NOT_FOUND`。
+- 参数格式、编码组合、未知 Provider 或只传 Provider 时返回 `400 INVALID_ARGUMENT`。
+- 每条 ProviderInstrument 快照独立返回并按 Instrument code、Provider code、ProviderInstrument code 稳定排序；即使属于同一 Provider 也不合并。
+- `quality_status` 原样反映数据库中最新快照的质量状态，不静默回退到更旧的 `valid` 行情。调用方可结合该字段和 `market_time` 判断是否采用。
+- 该集合按 Asset/Instrument 当前有效映射自然有界，首期一次返回且不提供 `limit` / `cursor`；查询过程不会触发实时 Provider 请求或采集任务。
 
 示例：
 
@@ -55,11 +64,22 @@ GET /api/market-info/v1/quotes/latest?asset_code=asset.crypto.btc
       "instrument_code": "instrument.bybit.spot.btc-usdt",
       "provider": "bybit",
       "provider_instrument_id": "019...",
+      "provider_instrument_code": "provider.bybit.spot.btcusdt",
       "provider_symbol": "BTCUSDT",
       "price": "62350.12",
+      "bid_price": "62349.80",
+      "bid_size": "0.42",
+      "ask_price": "62350.20",
+      "ask_size": "0.35",
+      "open_24h": "61000.00",
+      "high_24h": "63000.00",
+      "low_24h": "60500.00",
+      "base_volume_24h": "15234.8",
+      "quote_volume_24h": "941234567.8",
       "quote_currency": "USDT",
       "market_time": "2026-07-02T08:00:00Z",
-      "received_at": "2026-07-02T08:00:01Z"
+      "received_at": "2026-07-02T08:00:01Z",
+      "quality_status": "valid"
     }
   ]
 }
@@ -77,7 +97,28 @@ GET /api/market-info/v1/bars
 - `provider`
 - `interval`
 
-可选参数包括 `start_time`、`end_time`、`limit`、`order` 和分页游标。K 线接口不接受仅以 `asset_code` 定位数据，因为资产本身不能确定交易市场、交易对、计价币和来源口径。
+可选参数包括 `start_time`、`end_time`、`limit`、`order` 和分页游标。时间范围采用 `[start_time,end_time)`：起点包含、终点排除，也允许只提供单侧边界。K 线接口不接受仅以 `asset_code` 定位数据，因为资产本身不能确定交易市场、交易对、计价币和来源口径。
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `instrument_code` | 是 | Instrument 稳定可读编码 |
+| `provider` | 是 | Provider 稳定编码；后端解析为唯一选中的 ProviderInstrument |
+| `interval` | 是 | 首期为 `1h` 或 `1d`，并且必须存在于选中映射的 capabilities 中 |
+| `start_time` | 否 | RFC3339 时间，包含边界 |
+| `end_time` | 否 | RFC3339 时间，排除边界；必须晚于 start_time |
+| `order` | 否 | `asc` 或 `desc`，默认 `desc` |
+| `limit` | 否 | 默认 200，最大 1000 |
+| `cursor` | 否 | 绑定 Instrument、Provider、interval、order 和时间范围的不透明游标 |
+
+来源与分页规则：
+
+- 同一 Instrument/Provider 有多条当前有效映射时，按 `is_default DESC, priority ASC, provider_instrument_code ASC` 选中一条，与 `/instruments` 下拉选项保持一致。
+- 选中的映射必须启用、当前有效且 `historical = true`；请求 interval 不在该映射 capabilities 中时返回 `400 UNSUPPORTED_INTERVAL`，不自动切换其他映射。
+- 未知 Instrument 返回 `404 INSTRUMENT_NOT_FOUND`；未知 Provider、不可用来源组合或缺少必填字段返回 `400 INVALID_ARGUMENT`；非法时间范围返回 `400 INVALID_TIME_RANGE`。
+- 只读取 `is_current = true` 的 K 线 revision。相同开盘时间不会返回旧 revision，也不会跨 ProviderInstrument 合并。
+- 游标位置为上一页最后一根 K 线的 `open_time`。升序使用严格 `open_time > cursor`，降序使用严格 `open_time < cursor`，不会重复页边界。
+- 后续页必须重复发送与第一页完全相同的查询范围和排序参数；游标跨查询复用或篡改返回 `400`。
+- `quality_status` 原样返回，不静默替换或丢弃当前 revision。
 
 示例：
 
@@ -91,14 +132,17 @@ GET /api/market-info/v1/bars?instrument_code=instrument.bybit.spot.btc-usdt&prov
     "instrument_id": "019...",
     "instrument_code": "instrument.bybit.spot.btc-usdt",
     "base_asset_code": "asset.crypto.btc",
-    "quote_asset_code": "asset.cash.usdt"
+    "quote_asset_code": "asset.cash.usdt",
+    "quote_currency": "USDT"
   },
   "provider": {
     "provider_code": "bybit",
     "provider_instrument_id": "019...",
+    "provider_instrument_code": "provider.bybit.spot.btcusdt",
     "provider_symbol": "BTCUSDT"
   },
   "interval": "1h",
+  "order": "desc",
   "bars": [
     {
       "open_time": "2026-07-02T07:00:00Z",
@@ -108,7 +152,13 @@ GET /api/market-info/v1/bars?instrument_code=instrument.bybit.spot.btc-usdt&prov
       "low": "62120.50",
       "close": "62350.12",
       "volume": "152.834",
-      "is_closed": true
+      "quote_volume": "9512345.67",
+      "trade_count": 12450,
+      "revision": 1,
+      "is_closed": true,
+      "quality_status": "valid",
+      "provider_updated_at": "2026-07-02T08:00:01Z",
+      "collected_at": "2026-07-02T08:00:02Z"
     }
   ],
   "next_cursor": null
@@ -127,6 +177,15 @@ GET /api/market-info/v1/instruments?asset_code=asset.crypto.btc&enabled=true
 Asset -> Instrument -> Provider -> Interval
 ```
 
+查询参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `asset_code` | 是 | Asset 稳定可读编码 |
+| `enabled` | 否 | 省略时默认为 `true`；首期只接受 `true`，不通过公共联动接口暴露禁用配置 |
+| `limit` | 否 | 默认 50，最大 100；分页单位为 Instrument |
+| `cursor` | 否 | 绑定当前 `asset_code` 的不透明游标，不得跨资产复用 |
+
 默认值规则：
 
 - Instrument 默认选择当前资产下第一个启用且有可用行情来源的 Instrument。
@@ -134,6 +193,10 @@ Asset -> Instrument -> Provider -> Interval
 - Interval 首期默认选择 `1h`。
 - 前端必须把选中的默认值作为明确参数发送给后端；`/bars` 不设置隐式 Provider 默认值。
 - Provider 下拉框只展示当前 Instrument 已启用且有效的 Provider，Interval 下拉框由该 ProviderInstrument 的 `capabilities.intervals` 生成。
+- Instrument、ProviderInstrument 的有效期按请求时刻使用 `[valid_from, valid_to)` 判断；Provider 为 `active` 或 `degraded` 时可选，`disabled` 时排除。
+- Instrument 展示名优先读取 `metadata.display_name`，缺失时使用 Instrument 的 `symbol`。
+- 若同一 Instrument 下同一 Provider 暂时存在多条有效映射，按 `is_default`、`priority`、ProviderInstrument code 选择最优一条，Provider 下拉框不重复展示。
+- Instrument 按 `instrument_code` 稳定升序分页；Provider 按默认来源优先、`priority` 升序、Provider code 升序返回。
 
 ```json
 {
@@ -467,10 +530,13 @@ POST /api/market-info/v1/ingestion-tasks/{id}/cancel
 
 权限边界：
 
-- 查看采集状态可以给普通研究用户开放只读权限。
-- 修改订阅、发起回填、重试和取消任务需要管理员权限。
+- 公共行情查询、`/healthz` 和 `/readyz` 不要求认证。
+- 查看 Provider、订阅和采集任务状态需要 `operations.read`，可以授予普通研究用户。
+- 创建或修改订阅需要 `subscriptions.manage`。
+- 发起回填、重试和取消任务需要 `ingestion.manage`。
+- 缺失或无效 Bearer 凭证返回 `401`；身份有效但缺少对应 permission 返回 `403`。
 - 页面不得展示供应商 token、secret、签名材料或账户权限信息。
-- 所有手动操作写入 `requested_by` 和 `context`，便于审计。
+- 所有手动操作从认证 Principal 写入 `requested_by`，并在 context 中记录 actor type 和 Request ID；reason 由具体请求显式提供。
 
 ## 8. 统一错误响应与错误码
 
@@ -497,7 +563,7 @@ POST /api/market-info/v1/ingestion-tasks/{id}/cancel
 - `message` 用于开发与排障，不得作为调用方业务判断条件。
 - `retryable` 表示调用方是否适合稍后重试同一请求，不代表服务会自动重试。
 - `details` 只包含安全的结构化信息，不得返回 SQL、堆栈、内部连接地址或 Provider 凭证。
-- 每个 API 响应都返回 `X-Request-ID` header；调用方传入符合格式要求的 Request ID 时可以沿用，否则由服务生成。
+- 每个 API 响应都返回 `X-Request-ID` header；调用方传入规范的 `req_<UUIDv7>` 时可以沿用，否则由服务生成。
 - 错误响应中的 `request_id` 与 header 一致，并写入结构化日志，以串联 API、Service 和任务排障信息。
 
 首期 HTTP 状态与典型业务错误码：

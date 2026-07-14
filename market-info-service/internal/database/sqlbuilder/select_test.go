@@ -16,7 +16,9 @@ func TestSelectBuildsWhereAndQuery(t *testing.T) {
 		Where(Eq("provider_code", "bybit")).
 		And(Eq("instrument_code", "BTC-USDT-SPOT")).
 		And(Gte("bar_time", at)).
+		And(Gt("revision", 0)).
 		And(Lte("bar_time", at.Add(time.Hour))).
+		And(Lt("bar_time", at.Add(2*time.Hour))).
 		OrderBy("bar_time DESC").
 		Limit(100).
 		Offset(10).
@@ -25,11 +27,11 @@ func TestSelectBuildsWhereAndQuery(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	wantQuery := "SELECT instrument_id, close_price FROM market_data.market_bars WHERE provider_code = $1 AND instrument_code = $2 AND bar_time >= $3 AND bar_time <= $4 ORDER BY bar_time DESC LIMIT 100 OFFSET 10"
+	wantQuery := "SELECT instrument_id, close_price FROM market_data.market_bars WHERE provider_code = $1 AND instrument_code = $2 AND bar_time >= $3 AND revision > $4 AND bar_time <= $5 AND bar_time < $6 ORDER BY bar_time DESC LIMIT 100 OFFSET 10"
 	if query != wantQuery {
 		t.Fatalf("query = %q, want %q", query, wantQuery)
 	}
-	wantArgs := []any{"bybit", "BTC-USDT-SPOT", at, at.Add(time.Hour)}
+	wantArgs := []any{"bybit", "BTC-USDT-SPOT", at, 0, at.Add(time.Hour), at.Add(2 * time.Hour)}
 	if !reflect.DeepEqual(args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", args, wantArgs)
 	}

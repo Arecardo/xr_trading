@@ -8,17 +8,22 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"xr-trading/market-info-service/internal/api/httpapi"
+	"xr-trading/market-info-service/internal/application"
 	"xr-trading/market-info-service/internal/config"
 	"xr-trading/market-info-service/internal/database/migrations"
 	"xr-trading/market-info-service/internal/database/postgres"
 	"xr-trading/market-info-service/internal/database/readiness"
 	"xr-trading/market-info-service/internal/observability"
+	repositorypostgres "xr-trading/market-info-service/internal/repository/postgres"
 	"xr-trading/market-info-service/internal/server"
 )
 
 type pooledDB interface {
 	readiness.DB
+	repositorypostgres.CatalogDatabase
 	Close()
 }
 
@@ -77,8 +82,54 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err != nil {
 		return fmt.Errorf("create health handler: %w", err)
 	}
+	catalog, err := repositorypostgres.NewCatalogRepository(pool)
+	if err != nil {
+		return fmt.Errorf("create catalog repository: %w", err)
+	}
+	instrumentOptions, err := application.NewInstrumentOptionsService(catalog, catalog, time.Now)
+	if err != nil {
+		return fmt.Errorf("create instrument options service: %w", err)
+	}
+	instrumentOptionsHandler, err := httpapi.NewInstrumentOptionsHandler(instrumentOptions)
+	if err != nil {
+		return fmt.Errorf("create instrument options handler: %w", err)
+	}
+	latestQuoteReader, err := repositorypostgres.NewLatestQuoteQueryRepository(pool)
+	if err != nil {
+		return fmt.Errorf("create latest quote query repository: %w", err)
+	}
+	latestQuotes, err := application.NewLatestQuotesService(catalog, latestQuoteReader, time.Now)
+	if err != nil {
+		return fmt.Errorf("create latest quote service: %w", err)
+	}
+	latestQuotesHandler, err := httpapi.NewLatestQuotesHandler(latestQuotes)
+	if err != nil {
+		return fmt.Errorf("create latest quote handler: %w", err)
+	}
+	barReader, err := repositorypostgres.NewMarketBarQueryRepository(pool)
+	if err != nil {
+		return fmt.Errorf("create bar query repository: %w", err)
+	}
+	bars, err := application.NewBarsService(catalog, barReader, time.Now)
+	if err != nil {
+		return fmt.Errorf("create bar service: %w", err)
+	}
+	barsHandler, err := httpapi.NewBarsHandler(bars)
+	if err != nil {
+		return fmt.Errorf("create bars handler: %w", err)
+	}
 	mux := http.NewServeMux()
 	health.Register(mux)
+	if err := instrumentOptionsHandler.Register(mux); err != nil {
+		return fmt.Errorf("register instrument options handler: %w", err)
+	}
+	if err := latestQuotesHandler.Register(mux); err != nil {
+		return fmt.Errorf("register latest quote handler: %w", err)
+	}
+	if err := barsHandler.Register(mux); err != nil {
+		return fmt.Errorf("register bars handler: %w", err)
+	}
+	handler := httpapi.WithRequestID(mux)
 
 	httpServer, err := createServer(server.Config{
 		Address:         cfg.HTTPAddress,
@@ -86,7 +137,7 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 		WriteTimeout:    cfg.WriteTimeout,
 		IdleTimeout:     cfg.IdleTimeout,
 		ShutdownTimeout: cfg.ShutdownTimeout,
-	}, mux)
+	}, handler)
 	if err != nil {
 		return fmt.Errorf("create HTTP server: %w", err)
 	}
