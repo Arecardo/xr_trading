@@ -90,10 +90,6 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err != nil {
 		return fmt.Errorf("create instrument options service: %w", err)
 	}
-	instrumentOptionsHandler, err := httpapi.NewInstrumentOptionsHandler(instrumentOptions)
-	if err != nil {
-		return fmt.Errorf("create instrument options handler: %w", err)
-	}
 	latestQuoteReader, err := repositorypostgres.NewLatestQuoteQueryRepository(pool)
 	if err != nil {
 		return fmt.Errorf("create latest quote query repository: %w", err)
@@ -101,10 +97,6 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	latestQuotes, err := application.NewLatestQuotesService(catalog, latestQuoteReader, time.Now)
 	if err != nil {
 		return fmt.Errorf("create latest quote service: %w", err)
-	}
-	latestQuotesHandler, err := httpapi.NewLatestQuotesHandler(latestQuotes)
-	if err != nil {
-		return fmt.Errorf("create latest quote handler: %w", err)
 	}
 	barReader, err := repositorypostgres.NewMarketBarQueryRepository(pool)
 	if err != nil {
@@ -114,20 +106,14 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err != nil {
 		return fmt.Errorf("create bar service: %w", err)
 	}
-	barsHandler, err := httpapi.NewBarsHandler(bars)
-	if err != nil {
-		return fmt.Errorf("create bars handler: %w", err)
-	}
 	mux := http.NewServeMux()
 	health.Register(mux)
-	if err := instrumentOptionsHandler.Register(mux); err != nil {
-		return fmt.Errorf("register instrument options handler: %w", err)
-	}
-	if err := latestQuotesHandler.Register(mux); err != nil {
-		return fmt.Errorf("register latest quote handler: %w", err)
-	}
-	if err := barsHandler.Register(mux); err != nil {
-		return fmt.Errorf("register bars handler: %w", err)
+	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{
+		InstrumentOptions: instrumentOptions,
+		LatestQuotes:      latestQuotes,
+		Bars:              bars,
+	}); err != nil {
+		return fmt.Errorf("register public query routes: %w", err)
 	}
 	handler := httpapi.WithRequestID(mux)
 

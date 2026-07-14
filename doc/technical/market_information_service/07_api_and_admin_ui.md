@@ -8,7 +8,7 @@
 - 写接口只管理配置和采集任务，不允许直接写入、修改或删除行情记录。
 - 每条行情都保留 `instrument_id`、`provider_instrument_id` 和 `source`，不同来源的数据不隐式合并或互相覆盖。
 - 服务内部和数据库关系使用 UUID；对外查询同时支持稳定、可读的业务编码。
-- 时间统一使用 UTC ISO 8601 格式；价格、成交量等 decimal 字段使用字符串序列化，避免浮点精度损失。
+- 时间统一使用 UTC ISO 8601 格式；价格、成交量等 decimal 字段使用规范化字符串序列化，避免浮点精度损失。规范化结果不保证保留无意义的尾随零，例如 `"62349.80"` 会返回 `"62349.8"`；展示精度由前端依据 Instrument 精度格式化。
 - 列表接口原则上采用游标分页；最新行情接口返回按 Asset/Instrument 映射自然有界的多来源快照集合，首期不分页。所有写操作均需鉴权并记录操作人和审计上下文。
 - API 版本首期统一使用 `/api/market-info/v1` 前缀。
 - JSON 请求体只允许一个 JSON 值、拒绝未知字段，默认大小上限为 1 MiB；超过端点定义的上限返回 `400 INVALID_ARGUMENT`。
@@ -67,13 +67,13 @@ GET /api/market-info/v1/quotes/latest?asset_code=asset.crypto.btc
       "provider_instrument_code": "provider.bybit.spot.btcusdt",
       "provider_symbol": "BTCUSDT",
       "price": "62350.12",
-      "bid_price": "62349.80",
+      "bid_price": "62349.8",
       "bid_size": "0.42",
-      "ask_price": "62350.20",
+      "ask_price": "62350.2",
       "ask_size": "0.35",
-      "open_24h": "61000.00",
-      "high_24h": "63000.00",
-      "low_24h": "60500.00",
+      "open_24h": "61000",
+      "high_24h": "63000",
+      "low_24h": "60500",
       "base_volume_24h": "15234.8",
       "quote_volume_24h": "941234567.8",
       "quote_currency": "USDT",
@@ -147,9 +147,9 @@ GET /api/market-info/v1/bars?instrument_code=instrument.bybit.spot.btc-usdt&prov
     {
       "open_time": "2026-07-02T07:00:00Z",
       "close_time": "2026-07-02T08:00:00Z",
-      "open": "62180.10",
-      "high": "62420.00",
-      "low": "62120.50",
+      "open": "62180.1",
+      "high": "62420",
+      "low": "62120.5",
       "close": "62350.12",
       "volume": "152.834",
       "quote_volume": "9512345.67",
@@ -219,6 +219,15 @@ Asset -> Instrument -> Provider -> Interval
   "next_cursor": null
 }
 ```
+
+### 2.4 公共查询路由与只读边界
+
+- `/instruments`、`/quotes/latest`、`/bars` 作为一组公共查询路由统一装配，生产入口与数据库集成测试使用同一注册函数，避免测试路由和真实服务漂移。
+- 三个端点首期只接受 `GET`，不经过管理权限中间件；其他方法由路由层返回 `405 Method Not Allowed`。
+- 公共查询统一经过 Request ID 中间件，并使用相同的 JSON、错误 envelope、UTC、decimal 和游标约束。
+- 查询链路只允许调用 query service 和只读 repository，不调用 Adapter、Scheduler、Worker 或任务写 repository。
+- PostgreSQL 集成验收以同一批 Asset、Instrument、两个 Provider、两个 ProviderInstrument、最新行情和 K 线数据贯穿三个 HTTP 端点；查询前后核对订阅、Run、Task、checkpoint、最新行情、K 线和质量问题表，必须全部无变化。
+- API 样例是字段和数据类型契约；UUID 与时间值会随数据变化，decimal 按规范化字符串返回，前端不得依赖示例中的固定字符串长度或小数位数。
 
 ## 3. Provider 状态 API
 

@@ -73,7 +73,7 @@ API-002 冻结以下安全上下文：
 | QRY-001 | DONE | DOM-002、DB-010 | 已实现 Instrument/Provider 选项 Query Service、PostgreSQL 联表读模型与 `GET /instruments`，并完成运行时路由装配 | 联动列表只含启用有效来源；`is_default` 优先，否则 priority；interval 来自 capability；单元和真实 PostgreSQL 集成测试通过 |
 | QRY-002 | DONE | DOM-003、DB-012 | 已实现 LatestQuote Query Service、只读 PostgreSQL 联表 projection、`GET /quotes/latest` 与运行时路由装配 | Asset/Instrument 查询返回多来源列表且不合并；精确 Provider 过滤；空结果 200；非法组合 400；单元和真实 PostgreSQL 集成测试通过 |
 | QRY-003 | DONE | DOM-003、DB-012 | 已实现 Bar Query Service、来源解析与只读 PostgreSQL keyset 查询、`GET /bars` 和运行时路由装配 | 强制 instrument/provider/interval；UTC `[start,end)`；查询绑定游标；升降序；当前 revision；decimal 字符串；单元和真实 PostgreSQL 集成测试通过 |
-| QRY-004 | TODO | QRY-001～003 | 路由装配、API 契约样例与数据库集成测试 | 查询只读且不创建任务；响应与 `07_api_and_admin_ui.md` 一致 |
+| QRY-004 | DONE | QRY-001～003 | 已统一装配公共查询路由，并完成贯穿三个 HTTP API 的真实 PostgreSQL 契约与只读副作用集成测试 | 两个 Provider 来源不合并；响应字段、UTC/decimal、Request ID 与文档一致；查询前后七类持久化表无变化 |
 
 Service 与 Handler 可先基于 fake Repository 实现，PostgreSQL Repository 完成后再做契约测试，避免让 API 工作被 DDL 串行阻塞。
 
@@ -109,6 +109,15 @@ QRY-003 冻结以下查询契约：
 - HTTP 游标绑定 Instrument、Provider、interval、order、规范化后的 start/end 以及上一页最后一个 open_time。跨范围、跨排序复用、篡改或范围外位置均返回 `400`。
 - 响应保留 ProviderInstrument ID/code/symbol、Asset code、quote currency、revision、OHLCV、trade count、质量状态及采集时间；decimal 使用字符串，时间使用 UTC RFC3339Nano。
 - Handler、Service 与 query repository 均为只读，不调用 Adapter、不创建采集任务；当前 revision 的 `unchecked/warning/invalid` 状态原样返回。
+
+QRY-004 冻结以下横向验收契约：
+
+- 三个公共查询端点通过 `RegisterPublicQueryRoutes` 成组注册；生产入口和集成测试复用同一注册函数，新增公共查询端点时必须同步修改该路由集合及契约测试。
+- 路由只注册 `GET` 方法并统一位于 `/api/market-info/v1` 前缀下；Request ID 在整组路由外层统一装配，健康检查和公共查询保持相同请求追踪语义。
+- 真实 PostgreSQL 验收数据同时包含一个 Asset、一个 Instrument、两个 Provider、两个 ProviderInstrument、两条来源独立的最新行情及一条当前 K 线，贯穿 `/instruments`、`/quotes/latest`、`/bars` 的完整 HTTP JSON 契约。
+- 集成测试使用严格 JSON 解码校验文档声明字段，并验证 UUID 字符串、UTC 时间、规范化 decimal 字符串、默认 Provider、supported intervals、来源身份和 K 线 revision。
+- HTTP 查询前后对 `collection_subscriptions`、`ingestion_runs`、`ingestion_tasks`、`ingestion_checkpoints`、`latest_quotes`、`market_bars`、`data_quality_issues` 计数做快照比较。任一表变化均视为公共查询产生了非法副作用。
+- decimal 的精确数值契约不等于展示 scale 契约；JSON 使用规范化十进制字符串并可能移除尾随零，前端按 Instrument 的价格/数量精度负责展示格式化。
 
 ## 3. M2 验收场景
 
