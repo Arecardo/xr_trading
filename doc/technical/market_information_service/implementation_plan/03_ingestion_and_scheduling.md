@@ -4,12 +4,12 @@
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| ADP-001 | TODO | DOM-002、DOM-003 | `MarketDataAdapter`、capability、ProviderInstrumentRef、请求/响应 DTO、错误分类 | fake adapter 契约；认证/限流/网络/数据错误可稳定分类 |
-| ADP-002 | TODO | ADP-001 | AdapterRegistry 与 capability 校验 | 重复注册、未找到、不支持 interval、并发读取测试 |
-| ADP-003 | TODO | ADP-001 | Bybit Spot Adapter：latest、1h、1d、分页与限流 | `httptest` fixture；映射、时间顺序、分页、错误分类；真实 smoke test 手动启用 |
-| ADP-004 | TODO | ADP-001 | Longbridge 美股/ETF Adapter：latest、1h、1d | 脱敏 fixture；常规时段映射、错误分类；真实 smoke test 手动启用 |
+| ADP-001 | DONE | DOM-002、DOM-003 | 已实现 `MarketDataAdapter`、adapter capability、ProviderInstrumentRef、quote/bar DTO、分页 cursor、契约校验与 ProviderError 分类 | fake adapter 契约通过；来源错配、分页/顺序/范围校验通过；认证/限流/网络/无效响应错误可稳定分类；新包覆盖率 95.7% |
+| ADP-002 | DONE | ADP-001 | 已实现不可变 AdapterRegistry、启动时 capability 快照、精确市场/类型/操作/interval/limit 校验和稳定错误分类 | 重复注册、未找到、不支持 interval、快照隔离与并发读取测试通过；Registry 包覆盖率 97.2% |
+| ADP-003 | DONE | ADP-001、ADP-002 | 已实现 Bybit V5 Spot 公共行情 Adapter：latest、1h、1d、倒序转升序、opaque cursor、限流与错误映射 | 脱敏 `httptest` fixture 覆盖请求/字段/时间/分页/错误/响应上限；真实 smoke test 仅由 `BYBIT_SMOKE=1` 手动启用；包覆盖率 95.4% |
+| ADP-004 | DONE | ADP-001、ADP-002 | 已实现 Longbridge 官方 Go SDK 美股/ETF Adapter：latest、常规时段 1h/1d、无复权、倒序分页、opaque cursor、长连接生命周期和结构化错误映射 | 脱敏 fixture 覆盖股票/ETF、DST、常规收盘、分页、错误与敏感信息隔离；真实 smoke test 仅由 `LONGBRIDGE_SMOKE=1` 手动启用；包覆盖率 88.6% |
 
-ADP-003 与 ADP-004 可以由不同负责人并行，均不得把 Provider 特殊字段泄漏到 Worker。
+ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特殊字段泄漏到 Worker。下一步进入 ING-001 Worker claim loop。
 
 ## 2. Worker 与任务生命周期
 
@@ -42,4 +42,3 @@ SCH-001/002 可以与 Worker 并行开发；SCH-003/004 必须等待任务 Repos
 - 并发、租约、取消、重试、幂等和事务回滚测试通过。
 - 美股只按常规交易时段调度；加密按 7×24 调度。
 - `go test -race ./...` 与 PostgreSQL 并发集成测试通过。
-

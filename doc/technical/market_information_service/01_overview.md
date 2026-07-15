@@ -210,7 +210,7 @@ PostgreSQL
 
 已补充 Provider 适配器接口、能力声明、统一数据格式、错误分类和注册表设计，见 [Provider 适配器](./04_provider_adapter.md)。
 
-待补充：长桥与 Bybit 各自的 symbol 格式、分页限制、限流参数、交易日历差异和时间周期映射。该部分在具体实现阶段根据官方文档与 API 代码补充。
+Bybit Spot 的实现约束已随 ADP-003 补充到 [Provider 适配器](./04_provider_adapter.md#811-bybit-spot-adapter-第一阶段实现)；Longbridge 美股/ETF 的 SDK 隔离、symbol、常规时段、分页、错误码和凭据约束已随 ADP-004 补充到 [Provider 适配器](./04_provider_adapter.md#812-longbridge-美股etf-adapter-第一阶段实现)。提前休市的精确 K 线关闭时间仍待 SCH-002 交易日历统一处理。
 
 ### 14.4 调度与补数算法
 

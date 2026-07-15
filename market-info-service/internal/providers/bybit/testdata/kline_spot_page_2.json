@@ -1,0 +1,13 @@
+{
+  "retCode": 0,
+  "retMsg": "OK",
+  "result": {
+    "category": "spot",
+    "symbol": "BTCUSDT",
+    "list": [
+      ["1784073600000", "100", "110", "90", "105", "10", "1050"]
+    ]
+  },
+  "retExtInfo": {},
+  "time": 1784086200000
+}

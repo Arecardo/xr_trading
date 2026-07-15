@@ -1,0 +1,37 @@
+{
+  "quotes": [
+    {
+      "symbol": "AAPL.US",
+      "last_done": "189.45",
+      "prev_close": "187.90",
+      "open": "188.10",
+      "high": "190.00",
+      "low": "187.50",
+      "timestamp": 1784127600,
+      "volume": 45200123,
+      "turnover": "8543219876.50",
+      "trade_status": 0,
+      "pre_market": {
+        "last_done": "188.00",
+        "timestamp": 1784104200,
+        "volume": 120000,
+        "turnover": "22560000",
+        "high": "188.50",
+        "low": "187.20",
+        "prev_close": "187.90"
+      }
+    },
+    {
+      "symbol": "SPY.US",
+      "last_done": "620.25",
+      "prev_close": "618.10",
+      "open": "619.00",
+      "high": "621.00",
+      "low": "617.80",
+      "timestamp": 1784127601,
+      "volume": 30200123,
+      "turnover": "18732198765.00",
+      "trade_status": 0
+    }
+  ]
+}

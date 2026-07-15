@@ -39,7 +39,9 @@ Docker Compose
 
 ## 12. 安全与凭据
 
-- 长桥与 Bybit 行情凭据使用最小权限。
+- Bybit 第一阶段只调用公开 Spot 市场接口，不配置 API Key；Longbridge 使用官方 SDK，从 secret 注入 `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN` 或 OAuth 配置，且只授予行情权限。
+- Longbridge SDK 的 QuoteContext 是持久长连接，由服务启动阶段创建并在退出阶段关闭；不得按 Task 重建，也不得把 SDK 业务 message 或协议帧写入任务错误。
+- 如果未来启用 Bybit 私有接口，凭据必须与交易服务隔离并且不具备下单或资金权限。
 - 行情服务不得持有下单权限。
 - 研究、模拟和实盘交易凭据不得混用。
 - 密钥通过环境变量或外部 secret 文件注入，不写入数据库、配置样例和日志。

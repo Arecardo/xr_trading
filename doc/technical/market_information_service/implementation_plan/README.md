@@ -74,7 +74,7 @@ flowchart LR
 | DB-006 本地 PostgreSQL | DONE | Colima/Docker Compose 冷启动、迁移、重启保留数据已验证 |
 | DB-007 连接池与真实 readyz | DONE | pgxpool 配置解析、启动 Ping、真实 `/readyz=200/503` 与故障语义集成测试通过 |
 | QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；覆盖率持续保持不低于 80% |
-| PLAN-001 可执行实施计划 | DONE | DOM-001～003、API-001～002、QRY-001～004 已完成，M2 公共查询闭环已通过；下一阶段从 ADP-001 开始 |
+| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环及 ADP-001～004 已完成：统一端口、Registry、Bybit Spot 与 Longbridge 美股/ETF Adapter 均已落地；下一步进入 ING-001 Worker |
 
 ## 7. 首期明确不做
 
