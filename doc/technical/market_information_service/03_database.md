@@ -286,6 +286,12 @@ CREATE TABLE market_data.collection_subscriptions (
 );
 ```
 
+ADM-001 不新增表或 migration。订阅创建与修改的审计记录追加到 `metadata.audit_log` JSON 数组，每项固定包含 `action`、`requested_by`、`actor_type`、`request_id`、`reason` 和 UTC `occurred_at`。更新使用单条 `UPDATE ... jsonb_set(...)` 同时修改设置、追加审计和推进 `updated_at`；不会只覆盖最后一次操作者，也不会改变 `provider_instrument_id + interval` 的不可变身份。管理 API 响应不暴露 `metadata`，避免把内部审计结构耦合给页面。
+
+ADM-002 同样不新增表或 migration。HTTP 层调用 ING-006 已有的原子创建事务，一个请求仍只写入一行 `ingestion_runs` 和一行 `ingestion_tasks`；操作者写入 `requested_by`，actor type、Request ID、reason 及规范化范围写入 Run `context`。活动范围防重继续使用本节既定的事务级 advisory lock，不在 API 层增加进程内锁或永久唯一索引。
+
+ADM-003 不新增表或 migration。Run 管理查询以 Run 为一行聚合关联 Task 状态计数，并在查询投影中计算 `derived_status` 用于筛选；Application 层仍调用 ING-005 的同一状态表生成最终响应，避免使用可能滞后的 `ingestion_runs.status/count` 缓存。Task 管理查询联表 Subscription、ProviderInstrument、Provider 和 Instrument，一次返回 UUID 与可读身份，不在 API Handler 中追加 N+1 查询。首期数据规模先复用现有主键、状态/认领和 retry 索引，观察实际查询计划后再决定是否增加管理列表专用索引。
+
 ## 5. 行情表
 
 ### 5.1 market_data.market_bars
@@ -532,6 +538,10 @@ Worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 抢占任务并设置租约。
 系统自动重试继续使用原 Task 并增加 `attempt_count`。管理员对终态 `failed` Task 发起手动重试时，创建新的 Run 和 Task，并通过 `retry_of_task_id` 保留与原失败任务的审计关系；原 Task 状态和错误信息不被修改。
 
 同一个失败 Task 同时最多存在一个未结束的手动重试任务，`uq_active_manual_retry` 用于防止重复点击或并发请求创建等价任务。
+
+ADM-004 不新增表或 migration。手工重试事务先锁定原 Task，再验证 `failed` 状态、来源有效性和活动后继，最后插入新的 Run/Task；`uq_active_manual_retry` 仍作为并发唯一性的数据库最终防线。取消事务锁定同一 Task 行，更新取消字段后向父 Run 的 `context.operations` JSON 数组追加内部审计项，两次写入一起提交。管理查询不会公开该审计数组，Task 真值与 Run 查询缓存仍保持职责分离。
+
+ADM-005 同样不新增表、物化状态或 migration。Provider 状态 Repository 以 `task_stats + active_sources` CTE 一次读取 Provider 目录、有效订阅、checkpoint 与 Task 最近成功/失败时间；所有健康状态、scope 和 freshness 均在 Service 层按同一个 `checked_at` 动态计算。Provider 总体状态不是数据库事实，避免配置状态、Task 状态和行情新鲜度形成互相漂移的多套真值。
 
 ING-006 的手动 backfill 防重不新增永久唯一索引。创建事务以规范化的 `subscription_id + range_start + range_end` 获取 transaction-level PostgreSQL advisory lock，再联表检查 `run_type = backfill` 且 Task 为 `pending/running/retry_wait` 的完全相同范围。这样可安全串行化跨实例并发创建，同时允许终态后重采相同范围；若在 Task 表上建立全局部分唯一索引，会错误阻止增量或手动重试任务。advisory lock 只覆盖创建短事务，不延伸到 Provider 调用或 Worker 执行期。
 

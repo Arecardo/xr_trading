@@ -4,7 +4,7 @@
 
 | ID | 状态 | 依赖 | 输出 | 完成条件 |
 | --- | --- | --- | --- | --- |
-| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | 当前全量 statement coverage 89.9%，核心 ingestion 90.5%，markettime 87.6%，scheduler 88.5%，repository 84.9%，race 通过 |
+| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | ADM-005 后全量 statement coverage 87.9%，核心 application 89.1%、HTTP API 86.3%、ingestion 89.1%、scheduler 88.5%、repository 84.9%，race 通过 |
 | QA-002 | TODO | DB-006 | `integration` build tag、隔离 PostgreSQL、迁移/Repository 测试命令 | 默认单测不依赖 Docker；集成库可重复创建和清理 |
 | QA-003 | TODO | ADP-001 | Adapter fixture、fake server 和真实 smoke test 约定 | fixture 脱敏；真实测试需显式环境变量启用 |
 | QA-004 | TODO | ING-001、SCH-001 | 并发、固定时钟、固定 UUID、故障注入工具 | 租约/取消/重试/事务测试可确定性重复执行 |
@@ -49,10 +49,10 @@
 ### 采集与调度
 
 - [ ] Bybit/Longbridge 最小真实 smoke test 通过。
-- [ ] 增量采集、单范围 backfill、自动重试、手动重试和取消通过。
+- [x] 增量采集、单范围 backfill、自动重试、手动重试和取消通过。
 - [x] Worker 崩溃/租约过期后可恢复，旧 Worker 不产生数据污染；SCH-004 已接入每轮周期恢复并通过真实 PostgreSQL 验证。
 - [x] Run 状态由 Task 事实汇总，完整状态组合、并发快照冲突重算及 PostgreSQL 查询缓存字段已由 ING-005 验证。
-- [x] 单范围 backfill 只创建一个 Run/Task；跨实例并发防重、Task 内 Provider 分页和终态后再次回填已由 ING-006 的真实 PostgreSQL 测试验证（HTTP 管理入口仍由 ADM-002 接入）。
+- [x] 单范围 backfill 只创建一个 Run/Task；跨实例并发防重、Task 内 Provider 分页和终态后再次回填已由 ING-006 验证，ADM-002 进一步通过真实 PostgreSQL HTTP 测试验证 202、权限/审计、活动范围 409 和缺少订阅 404。
 - [x] 重启后使用经行情验证的 checkpoint 续采，并以当前闭合 `valid/warning` 行情事实识别、合并和补齐缺口（SCH-004）。
 - [x] 同一自动调度窗口的重复及跨实例并发扫描只创建一个稳定 Run/Task（SCH-003/004）。
 - [x] 加密货币按 7×24 小时、UTC 小时/日切和精确 close/revision delay 计算窗口（SCH-001）。
@@ -60,7 +60,7 @@
 
 ### 管理、安全与运维
 
-- [ ] 权限、操作者、reason 和 Request ID 审计信息完整。
+- [ ] 权限、操作者、reason 和 Request ID 审计信息完整（ADM-001 订阅创建/修改、ADM-002 backfill 与 ADM-004 retry/cancel 已通过真实 PostgreSQL HTTP 契约验证；后续管理写 API 继续沿用同一门禁）。
 - [ ] API、页面和日志不泄漏 Provider 凭证、连接串或堆栈。
 - [ ] Provider 状态、任务积压、失败和数据延迟有日志/指标/告警建议。
 - [ ] 文档、配置示例、migration 与实际行为一致。

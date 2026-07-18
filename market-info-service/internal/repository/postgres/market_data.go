@@ -35,7 +35,14 @@ type marketDataTransaction interface {
 	Rollback(context.Context) error
 }
 
-type pgxMarketDataDatabase struct{ pool *pgxpool.Pool }
+// IngestionDatabase is the pgx pool contract needed to assemble repositories
+// that use both ordinary queries and transactions.
+type IngestionDatabase interface {
+	CatalogDatabase
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+type pgxMarketDataDatabase struct{ pool IngestionDatabase }
 
 func (database pgxMarketDataDatabase) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	return database.pool.Exec(ctx, query, args...)

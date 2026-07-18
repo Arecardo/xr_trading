@@ -84,7 +84,7 @@ func TestSubscriptionRepositoryQueriesWritesAndPages(t *testing.T) {
 	if err != nil || len(page.Items) != 1 || page.NextAfterID == nil || *page.NextAfterID != firstDomainID || !rows.closed {
 		t.Fatalf("ListSubscriptions() = (%#v, %v, closed=%t)", page, err, rows.closed)
 	}
-	if err := repository.UpdateSubscriptionSettings(context.Background(), firstDomainID, domain.SubscriptionSettings{Enabled: false, Priority: 3, CloseDelaySeconds: 60}, now); err != nil {
+	if err := repository.UpdateSubscriptionSettings(context.Background(), firstDomainID, domain.SubscriptionSettings{Enabled: false, Priority: 3, CloseDelaySeconds: 60}, subscriptionAudit(now)); err != nil {
 		t.Fatalf("UpdateSubscriptionSettings() error = %v", err)
 	}
 }
@@ -118,12 +118,16 @@ func TestSubscriptionRepositoryMapsErrorsAndValidatesIdentity(t *testing.T) {
 	if _, err := repository.ListSubscriptions(context.Background(), domain.SubscriptionFilter{}); !errors.Is(err, domain.ErrDatabaseUnavailable) {
 		t.Fatalf("ListSubscriptions(unavailable) error = %v", err)
 	}
-	if err := repository.UpdateSubscriptionSettings(context.Background(), domain.ID{}, domain.SubscriptionSettings{}, time.Now()); !errors.Is(err, domain.ErrInvalidData) {
+	if err := repository.UpdateSubscriptionSettings(context.Background(), domain.ID{}, domain.SubscriptionSettings{}, subscriptionAudit(time.Now().UTC())); !errors.Is(err, domain.ErrInvalidData) {
 		t.Fatalf("UpdateSubscriptionSettings(zero) error = %v", err)
 	}
-	if err := repository.UpdateSubscriptionSettings(context.Background(), domain.IDFromUUID(uuid.New()), domain.SubscriptionSettings{}, time.Now()); !errors.Is(err, domain.ErrNotFound) {
+	if err := repository.UpdateSubscriptionSettings(context.Background(), domain.IDFromUUID(uuid.New()), domain.SubscriptionSettings{}, subscriptionAudit(time.Now().UTC())); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("UpdateSubscriptionSettings(missing) error = %v", err)
 	}
+}
+
+func subscriptionAudit(now time.Time) domain.SubscriptionAuditEntry {
+	return domain.SubscriptionAuditEntry{Action: "update", RequestedBy: "test@example.com", ActorType: "user", RequestID: "req_test", Reason: "test update", OccurredAt: now.UTC()}
 }
 
 func subscriptionRow(id, mappingID uuid.UUID, now time.Time, enabled bool) scanFunc {

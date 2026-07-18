@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion"
@@ -22,7 +21,7 @@ import (
 type IngestionRepository struct{ database marketDataDatabase }
 
 // NewIngestionRepository constructs an ingestion repository over pool.
-func NewIngestionRepository(pool *pgxpool.Pool) (*IngestionRepository, error) {
+func NewIngestionRepository(pool IngestionDatabase) (*IngestionRepository, error) {
 	if pool == nil {
 		return nil, errors.New("PostgreSQL pool is required")
 	}

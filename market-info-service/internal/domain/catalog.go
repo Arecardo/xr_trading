@@ -3,7 +3,10 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // CollectionSubscription describes one continuously collected interval for a
@@ -27,6 +30,42 @@ type SubscriptionSettings struct {
 	Priority             int16
 	CloseDelaySeconds    int
 	RevisionDelaySeconds *int
+}
+
+// SubscriptionAuditEntry is one immutable configuration change record stored
+// in collection_subscriptions.metadata.audit_log. Keeping it alongside the
+// changed row provides first-phase auditability without a separate audit table.
+type SubscriptionAuditEntry struct {
+	Action      string    `json:"action"`
+	RequestedBy string    `json:"requested_by"`
+	ActorType   string    `json:"actor_type"`
+	RequestID   string    `json:"request_id"`
+	Reason      string    `json:"reason"`
+	OccurredAt  time.Time `json:"occurred_at"`
+}
+
+// Validate checks the database-safe audit contract.
+func (entry SubscriptionAuditEntry) Validate() error {
+	if entry.Action != "create" && entry.Action != "update" {
+		return fmt.Errorf("subscription audit action: %w", ErrInvalidData)
+	}
+	if entry.ActorType != "user" && entry.ActorType != "service" {
+		return fmt.Errorf("subscription audit actor type: %w", ErrInvalidData)
+	}
+	for _, value := range []struct {
+		text    string
+		maximum int
+	}{
+		{entry.RequestedBy, 128}, {entry.RequestID, 128}, {entry.Reason, 512},
+	} {
+		if value.text == "" || value.text != strings.TrimSpace(value.text) || utf8.RuneCountInString(value.text) > value.maximum {
+			return fmt.Errorf("subscription audit text: %w", ErrInvalidData)
+		}
+	}
+	if entry.OccurredAt.IsZero() || entry.OccurredAt.Location() != time.UTC {
+		return fmt.Errorf("subscription audit time: %w", ErrInvalidData)
+	}
+	return nil
 }
 
 // SubscriptionFilter defines cursor-based subscription list filtering.
@@ -66,5 +105,5 @@ type SubscriptionRepository interface {
 	CreateSubscription(context.Context, CollectionSubscription) error
 	GetSubscription(context.Context, ID) (CollectionSubscription, error)
 	ListSubscriptions(context.Context, SubscriptionFilter) (SubscriptionPage, error)
-	UpdateSubscriptionSettings(context.Context, ID, SubscriptionSettings, time.Time) error
+	UpdateSubscriptionSettings(context.Context, ID, SubscriptionSettings, SubscriptionAuditEntry) error
 }

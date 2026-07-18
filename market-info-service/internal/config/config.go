@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,7 @@ const (
 	defaultDBMinConns       = int32(1)
 	defaultDBMaxConnLife    = 30 * time.Minute
 	defaultDBHealthPeriod   = 30 * time.Second
+	defaultAdminSubject     = "market-info-admin"
 )
 
 // Config contains runtime configuration for the HTTP process.
@@ -36,6 +38,8 @@ type Config struct {
 	DBMinConns       int32
 	DBMaxConnLife    time.Duration
 	DBHealthPeriod   time.Duration
+	AdminBearerToken string
+	AdminSubject     string
 }
 
 // LookupEnv provides environment values to the configuration loader.
@@ -64,6 +68,8 @@ func LoadFrom(lookup LookupEnv) (Config, error) {
 		DBMinConns:       defaultDBMinConns,
 		DBMaxConnLife:    defaultDBMaxConnLife,
 		DBHealthPeriod:   defaultDBHealthPeriod,
+		AdminBearerToken: valueOrDefault(lookup, "MARKET_INFO_ADMIN_BEARER_TOKEN", ""),
+		AdminSubject:     valueOrDefault(lookup, "MARKET_INFO_ADMIN_SUBJECT", defaultAdminSubject),
 	}
 
 	durations := []struct {
@@ -137,6 +143,12 @@ func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return errors.New("MARKET_INFO_DATABASE_URL is required")
 	}
+	if !validCredentialText(c.AdminBearerToken, 4096) {
+		return errors.New("MARKET_INFO_ADMIN_BEARER_TOKEN is required and must contain 1 to 4096 printable ASCII characters")
+	}
+	if c.AdminSubject == "" || c.AdminSubject != strings.TrimSpace(c.AdminSubject) || len([]rune(c.AdminSubject)) > 128 {
+		return errors.New("MARKET_INFO_ADMIN_SUBJECT must be non-empty, trimmed and at most 128 characters")
+	}
 	if c.DBMaxConns <= 0 {
 		return errors.New("MARKET_INFO_DB_MAX_CONNS must be positive")
 	}
@@ -147,6 +159,18 @@ func (c Config) Validate() error {
 		return errors.New("MARKET_INFO_DB_MIN_CONNS must be less than or equal to MARKET_INFO_DB_MAX_CONNS")
 	}
 	return nil
+}
+
+func validCredentialText(value string, maximum int) bool {
+	if value == "" || len(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func valueOrDefault(lookup LookupEnv, name, fallback string) string {

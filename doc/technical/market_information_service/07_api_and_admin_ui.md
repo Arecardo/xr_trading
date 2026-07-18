@@ -295,6 +295,17 @@ SCH-002 已冻结美股 scope 的底层状态投影：核心时段为 `[open,clo
 
 首期不提供“立即探测 Provider”接口；实际采集任务作为 Provider 的健康观测来源。
 
+ADM-005 首期冻结以下精确契约：
+
+- 端点要求 `operations.read`，不接受查询参数，不分页；返回全部 Provider 并按 `provider_code` 排序，因此 `disabled` 或没有有效订阅的 Provider 也不会从管理页面消失。
+- Repository 使用单次只读聚合查询读取 Provider、启用且当前有效并具备 historical/interval capability 的 Subscription、checkpoint，以及按 Subscription 聚合的 Task 最近成功/失败时间。查询不调用 Adapter、Scheduler 执行线或任何写 Repository，也不新增 migration。
+- scope 固定按 `provider + market + interval` 分组；Bybit spot 映射为 `crypto_spot + continuous`，Longbridge US 股票/ETF 映射为 `us_equity + regular`。scope 按 market、session type、interval 稳定排序。
+- 连续市场使用 SCH-001 的 UTC 最新闭合窗口；美股使用 SCH-002 的 NYSE 日历与核心交易时长。`data_delay_seconds` 是最新成功闭合 open time 落后于当前应有 open time 的市场时间秒数，多个订阅取最大值；`delayed_subscriptions` 是该 scope 的延迟订阅数。
+- 单个订阅连续失败达到 3 次时 scope 为 `unhealthy`；所有订阅均严重延迟时也为 `unhealthy`，首期“严重延迟”定义为至少 3 个 interval。部分失败、部分延迟、未达到严重阈值的延迟，或已知/未知混合时为 `degraded`；全部无成功事实时为 `unknown`；其余为 `healthy`。
+- 美股休市时 `market_state=closed`、`freshness_status=not_applicable`、`data_delay_seconds=null`，休市本身不降低健康状态；仍可由已持久化的连续失败事实降级。日历超出已核验年份不是正常休市，返回 `market_state=unknown`、`freshness_status=unknown`、scope/provider `unhealthy`。
+- Provider 总体状态由 scope 动态汇总，优先级为 `unhealthy > degraded > healthy/unknown 混合 > healthy > unknown`。人为 `configured_status=degraded` 会把计算出的 healthy 限制为 degraded；`configured_status=disabled` 的 Provider 和 scope `health_status` 固定为 unknown，不参与健康判断。
+- `last_success_at`、`last_failure_at` 和 `consecutive_failures` 分别取有效订阅中的最新成功、最新失败和最大连续失败次数；`checked_at` 是本次 Service 计算使用的同一个 UTC 固定时刻。
+
 ## 4. 采集订阅 API
 
 采集订阅描述系统需要持续采集的 ProviderInstrument 和周期，不负责隐式创建历史回填任务。
@@ -306,6 +317,10 @@ GET /api/market-info/v1/collection-subscriptions
 ```
 
 支持按 `provider`、`instrument_code`、`interval` 和 `enabled` 筛选，并使用游标分页。响应同时返回 UUID、可读编码和 Provider 外部代码，避免前端额外拼接查询。
+
+- 默认每页 50 条、最大 100 条，按 Subscription UUIDv7 升序；游标绑定全部筛选条件，跨条件复用返回 `400 INVALID_ARGUMENT`。
+- 每项返回 `subscription_id`、Provider/Instrument/ProviderInstrument 编码、`provider_symbol`、interval、四个可变设置以及创建/更新时间；不返回内部 `metadata.audit_log`。
+- 读取需要 `operations.read`。
 
 ### 4.2 创建订阅
 
@@ -321,7 +336,8 @@ POST /api/market-info/v1/collection-subscriptions
   "enabled": true,
   "priority": 100,
   "close_delay_seconds": 120,
-  "revision_delay_seconds": null
+  "revision_delay_seconds": null,
+  "reason": "enable hourly collection"
 }
 ```
 
@@ -331,6 +347,8 @@ Service 层根据 `provider + instrument_code` 解析唯一的 `provider_instrum
 - `interval` 在 ProviderInstrument 的 `capabilities.intervals` 中。
 - 同一 ProviderInstrument 和 interval 不重复；重复返回 `409 conflict`。
 - `priority`、`close_delay_seconds` 和非空的 `revision_delay_seconds` 不得为负数。
+- `enabled`、`priority` 和 `close_delay_seconds` 必须显式提供，避免字段遗漏被解释为禁用或零延迟；整数必须位于 PostgreSQL 对应类型范围内。
+- `reason` 必填、去除首尾空白后不能为空，最长 512 个字符；创建需要 `subscriptions.manage`。
 
 首期订阅不支持 `backfill_from`。创建或启用订阅后，从下一个 Scheduler 周期开始采集当前及之后的数据，不自动创建历史回填任务。
 
@@ -342,10 +360,21 @@ PATCH /api/market-info/v1/collection-subscriptions/{subscription_id}
 
 首期只允许修改 `enabled`、`priority`、`close_delay_seconds` 和 `revision_delay_seconds`。`provider`、`instrument_code`、`provider_instrument_id` 和 `interval` 构成订阅身份，不允许修改；如需更换，应禁用旧订阅并创建新订阅。
 
+```json
+{
+  "enabled": false,
+  "revision_delay_seconds": null,
+  "reason": "pause collection during provider maintenance"
+}
+```
+
+PATCH 至少提供一个可变设置，并且必须显式提供 `reason`。`revision_delay_seconds` 未提供表示保持不变，显式 `null` 表示关闭 revision pass，整数表示设置新延迟。未知字段（包括任何身份字段）统一拒绝。修改需要 `subscriptions.manage`。
+
 - 禁用后 Scheduler 不再创建新任务。
 - 禁用不会自动取消已经处于 `running` 的任务。
 - 修改优先级和延迟配置只影响之后创建的任务。
 - 首期不提供 DELETE，保留订阅配置和关联任务历史。
+- 创建与每次修改都把 Principal、actor type、Request ID、reason 和 UTC 时间原子追加到该订阅的内部 `metadata.audit_log`；失败请求不写审计记录。
 
 ### 4.4 显式历史回填
 
@@ -384,7 +413,7 @@ POST /api/market-info/v1/ingestion-runs/backfill
 
 并发提交完全相同且仍处于 `pending`、`running` 或 `retry_wait` 的回填范围时返回 `409 conflict`，防止页面重复点击创建等价任务。任务完成后允许再次对同一范围发起回填，用于数据修订。
 
-ING-006 已实现该接口下层的单 Run/Task BackfillService 与 PostgreSQL 并发防重语义；`ErrBackfillAlreadyRunning -> 409 BACKFILL_ALREADY_RUNNING` 的 HTTP handler、请求 JSON 解码和权限路由仍属于 ADM-002，不在 ING-006 提前接入。
+ADM-002 已接入该接口：严格 JSON 解码拒绝未知字段及数组请求，路由要求 `ingestion.manage`，`requested_by`、actor type 和 Request ID 只能取自认证上下文，客户端仅显式提供 reason。输入中的 RFC3339 时间在进入 Service 前规范化为 UTC；成功响应直接返回唯一 Run/Task 身份并使用 `202 Accepted`。`ErrBackfillAlreadyRunning` 映射为 `409 BACKFILL_ALREADY_RUNNING`；找不到匹配的启用订阅映射为 `404 SUBSCRIPTION_NOT_FOUND`。接口不调用 Provider、不等待 Worker，也不提供批量或 `backfill_from` 语义。
 
 ## 5. 采集 Run 与 Task 管理 API
 
@@ -398,6 +427,14 @@ GET /api/market-info/v1/ingestion-runs/{run_id}
 列表支持按 `run_type`、`trigger_type`、`status`、`requested_by`、`created_from` 和 `created_to` 筛选，并使用游标分页。列表返回 Run 汇总计数；详情返回 Run 信息和任务摘要，任务数量较多时使用独立 Task 列表分页，不在 Run 详情中无限展开。
 
 Run 状态及 `task_count`、`success_count`、`failed_count` 由 Service 层根据 Task 汇总校正，数据库中的 Task 状态仍是最终事实来源。
+
+ADM-003 冻结以下查询语义：
+
+- 默认每页 50、最大 100，按 Run UUIDv7 降序返回最新记录；游标绑定全部筛选条件。`created_from` 包含、`created_to` 排除，时间在进入 Application 前规范化为 UTC。
+- `status` 筛选也使用 Task 状态聚合产生的当前 Run 状态，不使用可能滞后的 Run 缓存状态。因此 Worker 刚修改 Task、Run 汇总写尚未完成时，列表筛选和响应仍保持一致。
+- Run 列表和详情返回 `pending/running/retry_wait/success/failed/canceled` 全部 Task 计数；`started_at/finished_at` 取 Task 聚合结果。详情不内嵌无限 Task 数组，前端使用 Task 列表的 `run_id` 筛选加载。
+- Run `context` 只公开 `trigger`、reason、actor type、Request ID、Provider/Instrument/interval 和范围等白名单字符串；不返回原始 `error_summary` 或未知 context 字段。
+- 列表与详情均需要 `operations.read`；未知 Run 返回 `404 NOT_FOUND`。
 
 ### 5.2 Task 列表与详情
 
@@ -416,6 +453,14 @@ GET /api/market-info/v1/ingestion-tasks/{task_id}
 - `retry_of_task_id`；如该任务被管理员重新执行，也可返回其后续手动重试任务链接。
 
 API 不得返回 Provider token、secret、签名内容、数据库连接信息或完整堆栈。面向前端的 `error_details` 必须经过脱敏。
+
+ADM-003 的 Task 查询约束如下：
+
+- 默认每页 50、最大 100，按 Task UUIDv7 降序；游标绑定 `run_id`、status、Provider、Instrument、interval 和创建时间范围。`created_from` 包含、`created_to` 排除。
+- 列表与详情使用同一联表读模型，返回 Run、Subscription、Provider、Instrument、ProviderInstrument 的 UUID 和可读编码，以及 Provider 外部 symbol；不会为每条 Task 再发起目录查询。
+- 响应包含范围、attempt、retry/lease、执行时间、Provider request ID、取消字段和 `retry_of_task_id`。ADM-004 创建新 Task 后，新 Task 可通过该字段定位原任务；ADM-003 首期不在原任务详情中额外返回无界的后继数组。
+- 原始 `error_message` 不对外返回。Service 根据标准化 `error_code` 生成固定可展示的 `error_summary`，未知 code 统一降级为 `internal_error`；`error_details` 首期只允许通过合法的 `provider_code`，未知字段、非法 JSON、控制字符和疑似凭据全部丢弃。
+- 列表与详情需要 `operations.read`；未知 Task 返回 `404 TASK_NOT_FOUND`。查询只读 PostgreSQL，不调用 Provider，也不修改行情、Task 或 Run 状态。
 
 ### 5.3 手动重试失败任务
 
@@ -436,6 +481,14 @@ POST /api/market-info/v1/ingestion-tasks/{task_id}/retry
 - 一次请求只创建一个 Run 和一个 Task；创建成功返回 `202 Accepted`。
 - 原订阅或 ProviderInstrument 已失效时返回 `409 conflict`，管理员应先修复配置。
 
+ADM-004 首期冻结以下精确契约：
+
+- 端点需要 `ingestion.manage`；请求体只允许 `reason`，该字段必须非空、去除首尾空白且不超过 512 字符。`requested_by`、actor type 和 Request ID 只从认证上下文注入，客户端不能覆盖。
+- 新 Run 使用 `run_type=repair`、`trigger_type=manual`；新 Task 的 `attempt_count=0`、状态为 `pending`，默认 `max_attempts=5`。原 Task 的状态、attempt 和错误记录完全不变。
+- 成功返回 `202 Accepted` 及 `run_id/task_id/status/created_at`，只表示新 Run/Task 已原子落库，不调用 Provider，也不等待 Worker。
+- Repository 在同一事务中锁定原 Task、校验其状态为 `failed`，并检查订阅启用、ProviderInstrument 有效且支持历史 interval、Provider/Instrument/Asset 当前可用。来源失效返回 `409 CONFLICT`；其他 Task 状态返回 `409 TASK_STATE_CONFLICT`；未知 Task 返回 `404 TASK_NOT_FOUND`。
+- 同一原失败 Task 只能有一个 `pending/running/retry_wait` 后继；重复或并发请求由原 Task 行锁和 `uq_active_manual_retry` 共同保护，返回 `409 MANUAL_RETRY_ALREADY_RUNNING`。后继进入终态后可以再次显式重试，保留完整链路。
+
 ### 5.4 取消任务
 
 ```http
@@ -453,6 +506,14 @@ POST /api/market-info/v1/ingestion-tasks/{task_id}/cancel
 - `success`、`failed` 和 `canceled` 是终态，不再接受取消，返回 `409 conflict`。
 - 取消成功返回最新 Task 状态；接口不等待 Worker 当前的外部 API 调用退出。
 - Service 取消和 Worker 最终提交都必须锁定并检查同一行 Task，避免取消与提交竞态造成数据污染。
+
+ADM-004 首期冻结以下精确契约：
+
+- 端点需要 `ingestion.manage`，请求体与审计注入规则和 retry 相同。
+- 成功返回 `200 OK` 及 `task_id/run_id/status/canceled_at`；`status` 固定为已提交的 `canceled`。未知 Task 返回 `404 TASK_NOT_FOUND`，终态或竞态冲突返回 `409 TASK_STATE_CONFLICT`。
+- Task 状态变更、`canceled_by/cancel_reason` 和父 Run `context.operations` 中的 actor type、Request ID、reason、task ID、发生时间在同一短事务持久化。该内部审计数组不作为管理查询的公开响应字段。
+- 事务提交后 Service 调用统一 RunService 刷新查询缓存；刷新失败不能回滚已经提交的取消，也不能诱导客户端重复写。Run/Task 查询仍根据 Task 真值返回当前状态。
+- retry/cancel 首期均不新增 migration，继续使用既有任务行、Run JSON context 与 `uq_active_manual_retry`。
 
 所有手动重试和取消操作都需要管理员权限，并记录 `requested_by`、`reason` 和审计上下文。
 

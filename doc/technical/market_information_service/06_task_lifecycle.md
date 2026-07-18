@@ -193,6 +193,8 @@ Frontend -> market-info-service API -> service 层检查任务状态 -> 更新�
 
 ING-004 的取消操作已改为显式短事务：先 `SELECT ... FOR UPDATE` 锁定 Task，再判断状态并更新。这样它与成功/失败最终事务在同一行锁上串行：取消先获得锁时，旧 Worker 返回 `ErrTaskLeaseLost`；Worker 已先成功提交时，取消看到终态并返回 conflict。不存在返回 not found，`success/failed/canceled` 返回 conflict，二者不再混淆。
 
+ADM-004 在这个原语之上增加经过认证的管理 Service：取消 Task 与向父 Run `context.operations` 追加审计记录在同一事务完成，记录 task ID、操作者、actor type、Request ID、reason 和 UTC 时间。事务提交后复用 RunService 汇总父 Run；若缓存刷新暂时失败，取消事实仍然成功，查询 API 继续依据 Task 状态纠偏。手工重试则锁定原 `failed` Task，在同一事务校验当前订阅/映射有效性并创建新的 `repair + manual` Run/Task；原 Task 永不被重置。
+
 ### 8.7 过期租约恢复
 
 恢复操作只选择 `status = running AND locked_until < now()`，并使用 `FOR UPDATE SKIP LOCKED` 支持多个服务实例安全并发执行。每个过期 Task 只会被一个恢复者处理：

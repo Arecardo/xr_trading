@@ -44,8 +44,10 @@ Docker Compose
 - 如果未来启用 Bybit 私有接口，凭据必须与交易服务隔离并且不具备下单或资金权限。
 - 行情服务不得持有下单权限。
 - 研究、模拟和实盘交易凭据不得混用。
-- 密钥通过环境变量或外部 secret 文件注入，不写入数据库、配置样例和日志。
+- 密钥通过环境变量或外部 secret 文件注入，不写入数据库或日志；版本库中的 `.env.example` 只能包含明确的本地占位值，部署时必须替换。
 - 原始供应商响应和错误日志必须过滤 token、签名和账户敏感字段。
+
+ADM-001 首期管理 API 使用可替换 `Authenticator` 的静态 Bearer 实现。进程启动必须提供 `MARKET_INFO_ADMIN_BEARER_TOKEN`，可用 `MARKET_INFO_ADMIN_SUBJECT` 设置审计主体（默认 `market-info-admin`）；静态实现构造后只保留 token 的 SHA-256 摘要。该首期凭据拥有 `operations.read`、`subscriptions.manage` 和 `ingestion.manage`，适用于小规模部署，后续可替换为网关/JWT/OIDC 而不改变 Handler 与 Application 契约。公共行情、`/healthz` 和 `/readyz` 仍不鉴权。
 
 具体凭据轮换、加密存储和生产环境 secret 管理方案留待部署设计阶段确定。
 
@@ -112,7 +114,7 @@ xr_market_data_runtime
 - UUIDv7 Go 实现库和生成失败处理。
 - `code` 字符集、最大长度及重命名审批流程的最终规范。
 - 租约续期的心跳频率和长任务安全停止策略。
-- 市场数据采集管理页面的接口字段、权限模型和前端交互细节。
+- 管理页面组件、轮询频率和前端交互细节。
 - 行情数据容量压测和 PostgreSQL 参数基线。
 - 生产环境备份、恢复目标和数据保留期限。
 - `updated_at` 自动维护采用应用写入还是数据库 trigger。

@@ -87,7 +87,8 @@ func TestDB011SubscriptionRepositoryAgainstPostgres(t *testing.T) {
 	}
 
 	settings := domain.SubscriptionSettings{Enabled: false, Priority: 3, CloseDelaySeconds: 60}
-	if err := subscriptions.UpdateSubscriptionSettings(ctx, first.ID, settings, now.Add(time.Second)); err != nil {
+	audit := domain.SubscriptionAuditEntry{Action: "update", RequestedBy: "integration@example.com", ActorType: "user", RequestID: "req_db011", Reason: "verify update", OccurredAt: now.Add(time.Second)}
+	if err := subscriptions.UpdateSubscriptionSettings(ctx, first.ID, settings, audit); err != nil {
 		t.Fatalf("UpdateSubscriptionSettings() error = %v", err)
 	}
 	loaded, err := subscriptions.GetSubscription(ctx, first.ID)

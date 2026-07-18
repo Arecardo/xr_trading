@@ -55,6 +55,66 @@ func TestRunServeWiresDependencies(t *testing.T) {
 		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"INSTRUMENT_NOT_FOUND"`) {
 			t.Fatalf("bars route is not wired: status=%d body=%s", response.Code, response.Body.String())
 		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/collection-subscriptions", nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("subscription route is not protected: status=%d body=%s", response.Code, response.Body.String())
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/market-info/v1/collection-subscriptions", strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer test-admin-token")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("subscription route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/market-info/v1/ingestion-runs/backfill", strings.NewReader(`{}`)))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("backfill route is not protected: status=%d body=%s", response.Code, response.Body.String())
+		}
+		request = httptest.NewRequest(http.MethodPost, "/api/market-info/v1/ingestion-runs/backfill", strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer test-admin-token")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("backfill route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/ingestion-runs", nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("ingestion query route is not protected: status=%d body=%s", response.Code, response.Body.String())
+		}
+		request = httptest.NewRequest(http.MethodGet, "/api/market-info/v1/ingestion-tasks?status=partial", nil)
+		request.Header.Set("Authorization", "Bearer test-admin-token")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("ingestion query route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/market-info/v1/ingestion-tasks/019f1452-90f7-7992-a87a-ca2727898301/retry", strings.NewReader(`{"reason":"retry"}`)))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("ingestion command route is not protected: status=%d body=%s", response.Code, response.Body.String())
+		}
+		request = httptest.NewRequest(http.MethodPost, "/api/market-info/v1/ingestion-tasks/019f1452-90f7-7992-a87a-ca2727898301/cancel", strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer test-admin-token")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("ingestion command route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/providers/status", nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("provider status route is not protected: status=%d body=%s", response.Code, response.Body.String())
+		}
+		request = httptest.NewRequest(http.MethodGet, "/api/market-info/v1/providers/status?probe=true", nil)
+		request.Header.Set("Authorization", "Bearer test-admin-token")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("provider status route is not wired: status=%d body=%s", response.Code, response.Body.String())
+		}
 		return server.New(cfg, handler)
 	})
 	if err != nil {
@@ -128,6 +188,8 @@ func validRuntimeConfig() (config.Config, error) {
 		DBMinConns:       1,
 		DBMaxConnLife:    time.Minute,
 		DBHealthPeriod:   time.Second,
+		AdminBearerToken: "test-admin-token",
+		AdminSubject:     "test-admin",
 	}, nil
 }
 
@@ -153,6 +215,10 @@ func (s *stubPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
 
 func (s *stubPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, errors.New("exec is not expected")
+}
+
+func (s *stubPool) Begin(context.Context) (pgx.Tx, error) {
+	return nil, errors.New("begin is not expected")
 }
 
 func (s *stubPool) Close() {

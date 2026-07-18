@@ -20,11 +20,14 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"MARKET_INFO_DB_MIN_CONNS",
 		"MARKET_INFO_DB_MAX_CONN_LIFETIME",
 		"MARKET_INFO_DB_HEALTH_CHECK_PERIOD",
+		"MARKET_INFO_ADMIN_BEARER_TOKEN",
+		"MARKET_INFO_ADMIN_SUBJECT",
 	} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("MARKET_INFO_HTTP_ADDRESS", "127.0.0.1:8181")
 	t.Setenv("MARKET_INFO_DATABASE_URL", "postgres://user:pass@localhost:5432/db")
+	t.Setenv("MARKET_INFO_ADMIN_BEARER_TOKEN", "test-admin-token")
 
 	cfg, err := Load()
 	if err != nil {
@@ -44,6 +47,9 @@ func TestLoadFromDefaults(t *testing.T) {
 	cfg, err := LoadFrom(func(key string) (string, bool) {
 		if key == "MARKET_INFO_DATABASE_URL" {
 			return "postgres://user:pass@localhost:5432/db", true
+		}
+		if key == "MARKET_INFO_ADMIN_BEARER_TOKEN" {
+			return "test-admin-token", true
 		}
 		return "", false
 	})
@@ -76,6 +82,8 @@ func TestLoadFromOverrides(t *testing.T) {
 		"MARKET_INFO_DB_MIN_CONNS":           "2",
 		"MARKET_INFO_DB_MAX_CONN_LIFETIME":   "15m",
 		"MARKET_INFO_DB_HEALTH_CHECK_PERIOD": "10s",
+		"MARKET_INFO_ADMIN_BEARER_TOKEN":     "override-admin-token",
+		"MARKET_INFO_ADMIN_SUBJECT":          "operations-admin",
 	}
 	cfg, err := LoadFrom(func(key string) (string, bool) {
 		value, ok := values[key]
@@ -105,6 +113,9 @@ func TestLoadFromRejectsInvalidInput(t *testing.T) {
 		{"bad address", map[string]string{"MARKET_INFO_HTTP_ADDRESS": "localhost"}, "valid host:port"},
 		{"bad port", map[string]string{"MARKET_INFO_HTTP_ADDRESS": "localhost:70000"}, "invalid port"},
 		{"missing database url", map[string]string{"MARKET_INFO_DATABASE_URL": ""}, "MARKET_INFO_DATABASE_URL is required"},
+		{"missing admin token", map[string]string{"MARKET_INFO_ADMIN_BEARER_TOKEN": ""}, "MARKET_INFO_ADMIN_BEARER_TOKEN is required"},
+		{"invalid admin token", map[string]string{"MARKET_INFO_ADMIN_BEARER_TOKEN": "has spaces"}, "printable ASCII"},
+		{"invalid admin subject", map[string]string{"MARKET_INFO_ADMIN_SUBJECT": " bad"}, "MARKET_INFO_ADMIN_SUBJECT"},
 		{"bad max conns", map[string]string{"MARKET_INFO_DB_MAX_CONNS": "many"}, "parse MARKET_INFO_DB_MAX_CONNS"},
 		{"bad min conns", map[string]string{"MARKET_INFO_DB_MIN_CONNS": "few"}, "parse MARKET_INFO_DB_MIN_CONNS"},
 		{"zero max conns", map[string]string{"MARKET_INFO_DB_MAX_CONNS": "0"}, "MARKET_INFO_DB_MAX_CONNS must be positive"},
@@ -121,6 +132,9 @@ func TestLoadFromRejectsInvalidInput(t *testing.T) {
 				}
 				if key == "MARKET_INFO_DATABASE_URL" {
 					return "postgres://user:pass@localhost:5432/db", true
+				}
+				if key == "MARKET_INFO_ADMIN_BEARER_TOKEN" {
+					return "test-admin-token", true
 				}
 				value, ok := test.values[key]
 				return value, ok
@@ -146,6 +160,9 @@ func TestValidateRejectsNegativeDuration(t *testing.T) {
 	cfg, err := LoadFrom(func(key string) (string, bool) {
 		if key == "MARKET_INFO_DATABASE_URL" {
 			return "postgres://user:pass@localhost:5432/db", true
+		}
+		if key == "MARKET_INFO_ADMIN_BEARER_TOKEN" {
+			return "test-admin-token", true
 		}
 		return "", false
 	})

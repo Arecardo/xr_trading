@@ -10,12 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"xr-trading/market-info-service/internal/api/httpapi"
 	"xr-trading/market-info-service/internal/application"
+	"xr-trading/market-info-service/internal/auth"
 	"xr-trading/market-info-service/internal/config"
 	"xr-trading/market-info-service/internal/database/migrations"
 	"xr-trading/market-info-service/internal/database/postgres"
 	"xr-trading/market-info-service/internal/database/readiness"
+	"xr-trading/market-info-service/internal/domain"
+	"xr-trading/market-info-service/internal/ingestion"
+	"xr-trading/market-info-service/internal/markettime"
 	"xr-trading/market-info-service/internal/observability"
 	repositorypostgres "xr-trading/market-info-service/internal/repository/postgres"
 	"xr-trading/market-info-service/internal/server"
@@ -24,6 +30,7 @@ import (
 type pooledDB interface {
 	readiness.DB
 	repositorypostgres.CatalogDatabase
+	Begin(context.Context) (pgx.Tx, error)
 	Close()
 }
 
@@ -106,6 +113,55 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err != nil {
 		return fmt.Errorf("create bar service: %w", err)
 	}
+	subscriptions, err := repositorypostgres.NewSubscriptionRepository(pool)
+	if err != nil {
+		return fmt.Errorf("create subscription repository: %w", err)
+	}
+	subscriptionService, err := application.NewSubscriptionService(subscriptions, subscriptions, time.Now, domain.NewID)
+	if err != nil {
+		return fmt.Errorf("create subscription service: %w", err)
+	}
+	ingestionRepository, err := repositorypostgres.NewIngestionRepository(pool)
+	if err != nil {
+		return fmt.Errorf("create ingestion repository: %w", err)
+	}
+	backfills, err := ingestion.NewBackfillService(ingestion.BackfillConfig{}, ingestionRepository, time.Now, domain.NewID)
+	if err != nil {
+		return fmt.Errorf("create backfill service: %w", err)
+	}
+	ingestionQueries, err := application.NewIngestionQueryService(ingestionRepository)
+	if err != nil {
+		return fmt.Errorf("create ingestion query service: %w", err)
+	}
+	runService, err := ingestion.NewRunService(ingestionRepository)
+	if err != nil {
+		return fmt.Errorf("create ingestion run service: %w", err)
+	}
+	taskCommands, err := ingestion.NewManualTaskService(ingestion.ManualTaskConfig{}, ingestionRepository, runService, time.Now, domain.NewID)
+	if err != nil {
+		return fmt.Errorf("create ingestion task command service: %w", err)
+	}
+	usCalendar, err := markettime.NewNYSECalendar()
+	if err != nil {
+		return fmt.Errorf("create US trading calendar: %w", err)
+	}
+	providerStatuses, err := application.NewProviderStatusService(ingestionRepository, time.Now, usCalendar)
+	if err != nil {
+		return fmt.Errorf("create provider status service: %w", err)
+	}
+	adminPrincipal, err := application.NewPrincipal(
+		cfg.AdminSubject, application.ActorTypeUser,
+		application.PermissionOperationsRead,
+		application.PermissionSubscriptionsManage,
+		application.PermissionIngestionManage,
+	)
+	if err != nil {
+		return fmt.Errorf("create admin principal: %w", err)
+	}
+	authenticator, err := auth.NewStaticBearerAuthenticator([]auth.StaticCredential{{Token: cfg.AdminBearerToken, Principal: adminPrincipal}})
+	if err != nil {
+		return fmt.Errorf("create admin authenticator: %w", err)
+	}
 	mux := http.NewServeMux()
 	health.Register(mux)
 	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{
@@ -114,6 +170,21 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 		Bars:              bars,
 	}); err != nil {
 		return fmt.Errorf("register public query routes: %w", err)
+	}
+	if err := httpapi.RegisterSubscriptionRoutes(mux, subscriptionService, authenticator); err != nil {
+		return fmt.Errorf("register subscription routes: %w", err)
+	}
+	if err := httpapi.RegisterBackfillRoutes(mux, backfills, authenticator); err != nil {
+		return fmt.Errorf("register backfill routes: %w", err)
+	}
+	if err := httpapi.RegisterIngestionQueryRoutes(mux, ingestionQueries, authenticator); err != nil {
+		return fmt.Errorf("register ingestion query routes: %w", err)
+	}
+	if err := httpapi.RegisterIngestionTaskCommandRoutes(mux, taskCommands, authenticator); err != nil {
+		return fmt.Errorf("register ingestion task command routes: %w", err)
+	}
+	if err := httpapi.RegisterProviderStatusRoutes(mux, providerStatuses, authenticator); err != nil {
+		return fmt.Errorf("register provider status routes: %w", err)
 	}
 	handler := httpapi.WithRequestID(mux)
 
