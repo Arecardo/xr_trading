@@ -424,6 +424,10 @@ ingestion_checkpoints
 
 一次定时增量、手动回填、修复或修订形成一个 Run。`run_key` 用于避免同一调度时点重复创建批次。
 
+SCH-003 将自动调度批次的 key 固定为 `run_type.scheduler.trigger.subscription_id.range_start.range_end`；时间使用 UTC 纳秒精度固定格式。一个 key 对应一个 Subscription、一个 close/revision trigger 和一个 Task 范围。跨实例重复插入依赖现有 `uq_ingestion_runs_key` 串行化，因此无需新增 migration 或额外分布式锁。
+
+Repository 使用 `INSERT ... ON CONFLICT (run_key) DO NOTHING` 后读取既有 Run/Task 核对等价性：完全等价返回幂等未创建；同 key 但类型、调度时间、Subscription、范围或 Task 数不同返回 conflict。Subscription 启用状态重检、Run 插入和 Task 插入位于同一事务；Run 成功而 Task 失败时整体回滚。
+
 ```sql
 CREATE TABLE market_data.ingestion_runs (
     id                  uuid PRIMARY KEY,
@@ -552,6 +556,8 @@ CREATE TABLE market_data.ingestion_checkpoints (
 ```
 
 Checkpoint 只用于快速恢复和生成增量计划，不是数据完整性的唯一事实来源。缺口检测必须同时检查实际 `market_bars`。
+
+SCH-004 读取 checkpoint 后会枚举从 Subscription `updated_at` 到 `last_closed_open_time` 的全部期望 K 线，并确认每个 open time 对应的 `market_bars` 都是 `is_current=true`、`is_closed=true`、`quality_status IN ('valid','warning')`；任一缺失都会回退到启用边界重新规划，不能仅凭最大时间、最后一根存在或行数替代完整性事实。checkpoint 后的期望 open time 也与实际行情逐一比较。查询复用现有 `provider_instrument_id + interval + open_time` 主键/当前版本索引与时间范围，不新增 migration。
 
 ## 9. 数据质量表
 

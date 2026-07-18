@@ -7,9 +7,9 @@
 | ADP-001 | DONE | DOM-002、DOM-003 | 已实现 `MarketDataAdapter`、adapter capability、ProviderInstrumentRef、quote/bar DTO、分页 cursor、契约校验与 ProviderError 分类 | fake adapter 契约通过；来源错配、分页/顺序/范围校验通过；认证/限流/网络/无效响应错误可稳定分类；新包覆盖率 95.7% |
 | ADP-002 | DONE | ADP-001 | 已实现不可变 AdapterRegistry、启动时 capability 快照、精确市场/类型/操作/interval/limit 校验和稳定错误分类 | 重复注册、未找到、不支持 interval、快照隔离与并发读取测试通过；Registry 包覆盖率 97.2% |
 | ADP-003 | DONE | ADP-001、ADP-002 | 已实现 Bybit V5 Spot 公共行情 Adapter：latest、1h、1d、倒序转升序、opaque cursor、限流与错误映射 | 脱敏 `httptest` fixture 覆盖请求/字段/时间/分页/错误/响应上限；真实 smoke test 仅由 `BYBIT_SMOKE=1` 手动启用；包覆盖率 95.4% |
-| ADP-004 | DONE | ADP-001、ADP-002 | 已实现 Longbridge 官方 Go SDK 美股/ETF Adapter：latest、常规时段 1h/1d、无复权、倒序分页、opaque cursor、长连接生命周期和结构化错误映射 | 脱敏 fixture 覆盖股票/ETF、DST、常规收盘、分页、错误与敏感信息隔离；真实 smoke test 仅由 `LONGBRIDGE_SMOKE=1` 手动启用；包覆盖率 88.6% |
+| ADP-004 | DONE | ADP-001、ADP-002 | 已实现 Longbridge 官方 Go SDK 美股/ETF Adapter：latest、常规时段 1h/1d、无复权、倒序分页、opaque cursor、长连接生命周期和结构化错误映射 | 脱敏 fixture 覆盖股票/ETF、DST、常规/提前收盘、分页、错误与敏感信息隔离；真实 smoke test 仅由 `LONGBRIDGE_SMOKE=1` 手动启用；当前包覆盖率 87.4% |
 
-ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特殊字段泄漏到 Worker。ING-001～ING-006 已完成 Worker、K 线采集、自动重试、取消/租约恢复、Run 状态汇总和单任务 backfill 闭环，下一步进入 SCH-001 时间窗口计算器。
+ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特殊字段泄漏到 Worker。ING-001～ING-006 已完成 Worker、K 线采集、自动重试、取消/租约恢复、Run 状态汇总和单任务 backfill 闭环；SCH-001～004 已完成连续市场窗口、美股交易日历/freshness、跨实例幂等增量 Scheduler，以及 checkpoint/行情事实缺口续采和周期租约恢复。M3 采集闭环代码任务已经完成，下一阶段进入 ADM-001 管理订阅 API。
 
 ## 2. Worker 与任务生命周期
 
@@ -28,10 +28,10 @@ ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特�
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| SCH-001 | TODO | DOM-003 | 纯时间窗口计算器、Clock 接口、close/revision delay | Bybit 7×24、小时/日切、边界与重启窗口表驱动测试 |
-| SCH-002 | TODO | SCH-001 | 美股常规交易日历接口与 freshness 计算 | 周末、节假日、提前休市、DST；休市返回 not_applicable 且不累计延迟 |
-| SCH-003 | TODO | DB-011、DB-013、SCH-001 | 增量 Scheduler、稳定 run_key、Run/Task 原子创建 | 同一调度时点重复运行不重复建任务；Scheduler 不调用 Adapter Fetch |
-| SCH-004 | TODO | SCH-003 | checkpoint 续采、缺口检测与过期租约恢复调度 | checkpoint 仅作加速；行情表是完整性事实；重启后安全补齐 |
+| SCH-001 | DONE | DOM-003 | 已实现连续市场纯时间窗口计算器、Clock 接口、close/revision delay 策略；输入各 trigger 的下一根未调度 open time，输出可聚合补齐的 UTC `[start,end)` | Bybit 7×24、小时/UTC 日切、精确 delay 边界、时区归一化、无重复窗口与重启追赶均由表驱动测试覆盖；当前 scheduler 包覆盖率 89.1% |
+| SCH-002 | DONE | SCH-001 | 已实现共享 `TradingCalendar` 端口、经 NYSE 官方日历核验的 2026～2028 常规时段/休市/提前收市数据、年度异常覆盖和美股 freshness 纯计算；Longbridge close time 复用同一日历 | EST/EDT、周末、节假日、13:00 提前收市、精确开闭市边界、下一开市和有效交易时长均已测试；休市强制 `not_applicable + null delay`；markettime 87.6%、scheduler 89.1% |
+| SCH-003 | DONE | DB-011、DB-013、SCH-001、SCH-002 | 已实现启用订阅分页扫描、close/revision 最新到期窗口、稳定 `run_key`、单 Run/Task 原子创建、订阅事务内重检和等价键幂等；Scheduler 只依赖 Store/Clock/ID/Calendar | 单元测试覆盖连续/美股、分页、启用边界、键冲突和事务故障；真实 PostgreSQL 两实例并发扫描只创建一个 Run/Task，且 Task 可被 Worker claim；scheduler 88.2%、repository 84.6% |
+| SCH-004 | DONE | SCH-003 | 已实现每轮先恢复过期租约、checkpoint 后继续采、checkpoint 行情事实验证、失真回退、闭合有效行情缺口检测、连续缺口合并和单轮工作量上限 | checkpoint 仅作加速；`market_bars` 当前闭合 `valid/warning` 版本是完整性事实；加密/美股、提前收市、冷启动、真实中间缺口和 PostgreSQL 租约恢复闭环通过；scheduler 88.5%、repository 84.9% |
 
 SCH-001/002 可以与 Worker 并行开发；SCH-003/004 必须等待任务 Repository 和事务契约冻结。
 

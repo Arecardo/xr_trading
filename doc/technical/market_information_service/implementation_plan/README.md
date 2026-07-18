@@ -2,7 +2,7 @@
 
 > 计划依据：本目录上级的领域、数据库、Adapter、采集流程、任务生命周期、API、运维与 Go 开发规范。  
 > 当前状态：实施中。  
-> 最近更新：2026-07-15
+> 最近更新：2026-07-19
 
 ## 1. 使用方式
 
@@ -74,7 +74,7 @@ flowchart LR
 | DB-006 本地 PostgreSQL | DONE | Colima/Docker Compose 冷启动、迁移、重启保留数据已验证 |
 | DB-007 连接池与真实 readyz | DONE | pgxpool 配置解析、启动 Ping、真实 `/readyz=200/503` 与故障语义集成测试通过 |
 | QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；覆盖率持续保持不低于 80% |
-| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环、ADP-001～004、ING-001～006 已完成：真实 Adapter、Worker 原子认领、K 线成功/失败事务、自动重试、取消/租约恢复、Run 汇总及单任务 backfill 已落地；下一步进入 SCH-001 时间窗口计算器 |
+| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环、ADP-001～004、ING-001～006、SCH-001～004 已完成：真实 Adapter、完整采集生命周期、backfill、连续/美股时间、跨实例幂等调度以及 checkpoint/行情事实缺口续采已落地；下一步进入 ADM-001 管理订阅 API |
 
 ## 7. 首期明确不做
 

@@ -8,6 +8,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion/ports"
+	"xr-trading/market-info-service/internal/markettime"
 )
 
 func TestNewAdapterAndCapabilities(t *testing.T) {
@@ -52,6 +53,9 @@ func TestNewAdapterRejectsMissingClients(t *testing.T) {
 	adapter, err := New(Config{Client: &fakeClient{}, MarketLocation: custom})
 	if err != nil || adapter.marketLocation != custom {
 		t.Fatalf("New(custom location) = (%#v, %v)", adapter, err)
+	}
+	if _, err := New(Config{Client: &fakeClient{}, MarketCalendar: nilLocationCalendar{}}); !errors.Is(err, domain.ErrInvalidData) {
+		t.Fatalf("New(invalid calendar) error = %v", err)
 	}
 }
 
@@ -111,6 +115,33 @@ func TestLongbridgePeriodAndSessionClose(t *testing.T) {
 	if _, err := adapter.regularSessionClose(time.Date(2026, 7, 15, 21, 0, 0, 0, time.UTC), domain.BarInterval1Hour); err == nil {
 		t.Fatal("after-session close error = nil")
 	}
+	earlyClose, err := adapter.regularSessionClose(time.Date(2026, 11, 27, 17, 30, 0, 0, time.UTC), domain.BarInterval1Hour)
+	if err != nil || earlyClose.Time() != time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC) {
+		t.Fatalf("early close = (%s, %v)", earlyClose, err)
+	}
+	dailyEarlyClose, err := adapter.regularSessionClose(time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC), domain.BarInterval1Day)
+	if err != nil || dailyEarlyClose.Time() != time.Date(2026, 12, 24, 18, 0, 0, 0, time.UTC) {
+		t.Fatalf("daily early close = (%s, %v)", dailyEarlyClose, err)
+	}
+	if _, err := adapter.regularSessionClose(time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), domain.BarInterval1Day); err == nil {
+		t.Fatal("holiday daily close error = nil")
+	}
+}
+
+type nilLocationCalendar struct{}
+
+func (nilLocationCalendar) Location() *time.Location { return nil }
+func (nilLocationCalendar) SessionForDate(markettime.MarketDate) (markettime.MarketSession, bool, error) {
+	return markettime.MarketSession{}, false, nil
+}
+func (nilLocationCalendar) SessionAt(time.Time) (markettime.MarketSession, bool, error) {
+	return markettime.MarketSession{}, false, nil
+}
+func (nilLocationCalendar) NextSession(time.Time) (markettime.MarketSession, error) {
+	return markettime.MarketSession{}, nil
+}
+func (nilLocationCalendar) PreviousSession(time.Time) (markettime.MarketSession, error) {
+	return markettime.MarketSession{}, nil
 }
 
 func codeOf(err error) ports.ProviderErrorCode {

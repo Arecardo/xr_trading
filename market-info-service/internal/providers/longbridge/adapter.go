@@ -12,6 +12,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion/ports"
+	"xr-trading/market-info-service/internal/markettime"
 )
 
 const (
@@ -35,6 +36,7 @@ type Config struct {
 	Client         Client
 	Now            func() time.Time
 	MarketLocation *time.Location
+	MarketCalendar markettime.TradingCalendar
 }
 
 // Adapter maps Longbridge SDK responses to provider-independent DTOs.
@@ -43,6 +45,7 @@ type Adapter struct {
 	client         Client
 	now            func() time.Time
 	marketLocation *time.Location
+	marketCalendar markettime.TradingCalendar
 }
 
 // New constructs an adapter around an already initialized client.
@@ -65,7 +68,17 @@ func New(config Config) (*Adapter, error) {
 			return nil, fmt.Errorf("load US market location: %w", err)
 		}
 	}
-	return &Adapter{providerCode: providerCode, client: config.Client, now: now, marketLocation: location}, nil
+	calendar := config.MarketCalendar
+	if calendar == nil {
+		calendar, err = markettime.NewNYSECalendar()
+		if err != nil {
+			return nil, fmt.Errorf("construct Longbridge US market calendar: %w", err)
+		}
+	}
+	if calendar.Location() == nil {
+		return nil, fmt.Errorf("construct Longbridge adapter: market calendar location is required: %w", domain.ErrInvalidData)
+	}
+	return &Adapter{providerCode: providerCode, client: config.Client, now: now, marketLocation: location, marketCalendar: calendar}, nil
 }
 
 // NewFromSDKConfig creates and owns a production Longbridge QuoteContext.

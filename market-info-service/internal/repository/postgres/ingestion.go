@@ -15,6 +15,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion"
+	"xr-trading/market-info-service/internal/scheduler"
 )
 
 // IngestionRepository stores durable run, task and checkpoint state.
@@ -55,6 +56,193 @@ func (repository *IngestionRepository) CreateRunWithTask(ctx context.Context, ru
 		return fmt.Errorf("commit create run with task: %w", MapError(err))
 	}
 	return nil
+}
+
+// ListSchedulingTargets scans currently valid enabled subscriptions in UUIDv7
+// order. Full execution contexts are loaded after closing the ID query so a
+// small pgx pool cannot deadlock on nested reads.
+func (repository *IngestionRepository) ListSchedulingTargets(ctx context.Context, afterID *domain.ID, limit int, effectiveAt time.Time) (scheduler.SchedulingTargetPage, error) {
+	if limit < 1 || limit > 100 || effectiveAt.IsZero() || (afterID != nil && afterID.IsZero()) {
+		return scheduler.SchedulingTargetPage{}, fmt.Errorf("list scheduling targets: %w", domain.ErrInvalidData)
+	}
+	rows, err := repository.database.Query(ctx, `SELECT subscriptions.id
+FROM market_data.collection_subscriptions AS subscriptions
+JOIN market_data.provider_instruments AS mappings ON mappings.id = subscriptions.provider_instrument_id
+JOIN market_data.providers AS providers ON providers.id = mappings.provider_id
+JOIN core.instruments AS instruments ON instruments.id = mappings.instrument_id
+JOIN core.assets AS assets ON assets.id = instruments.asset_id
+WHERE subscriptions.enabled = true
+  AND ($1::uuid IS NULL OR subscriptions.id > $1)
+  AND mappings.enabled = true
+  AND (mappings.valid_from IS NULL OR mappings.valid_from <= $2)
+  AND (mappings.valid_to IS NULL OR mappings.valid_to > $2)
+  AND providers.status IN ('active', 'degraded')
+  AND instruments.status = 'active'
+  AND (instruments.valid_from IS NULL OR instruments.valid_from <= $2)
+  AND (instruments.valid_to IS NULL OR instruments.valid_to > $2)
+  AND assets.status = 'active'
+ORDER BY subscriptions.id ASC
+LIMIT $3`, optionalIDToDatabase(afterID), TimeToDatabase(effectiveAt), limit+1)
+	if err != nil {
+		return scheduler.SchedulingTargetPage{}, fmt.Errorf("query scheduling targets: %w", MapError(err))
+	}
+	ids := make([]domain.ID, 0, limit+1)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return scheduler.SchedulingTargetPage{}, fmt.Errorf("scan scheduling target ID: %w", MapError(err))
+		}
+		ids = append(ids, IDFromDatabase(id))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return scheduler.SchedulingTargetPage{}, fmt.Errorf("iterate scheduling target IDs: %w", MapError(err))
+	}
+	rows.Close()
+
+	page := scheduler.SchedulingTargetPage{}
+	if len(ids) > limit {
+		next := ids[limit-1]
+		page.NextAfterID = &next
+		ids = ids[:limit]
+	}
+	page.Items = make([]scheduler.SchedulingTarget, 0, len(ids))
+	for _, id := range ids {
+		execution, err := repository.LoadExecutionContext(ctx, id)
+		if err != nil {
+			return scheduler.SchedulingTargetPage{}, fmt.Errorf("load scheduling target %s: %w", id, err)
+		}
+		target := scheduler.SchedulingTarget{
+			Subscription: execution.Subscription, ProviderCode: execution.Provider.Code,
+			ProviderMarket: execution.ProviderInstrument.ProviderMarket, InstrumentCode: execution.Instrument.Code,
+			AssetType: execution.Asset.AssetType, InstrumentType: execution.Instrument.InstrumentType,
+			Capabilities: execution.ProviderInstrument.Capabilities,
+		}
+		if err := target.Validate(); err != nil {
+			return scheduler.SchedulingTargetPage{}, fmt.Errorf("validate scheduling target %s: %w", id, err)
+		}
+		page.Items = append(page.Items, target)
+	}
+	return page, nil
+}
+
+// LoadSchedulingCheckpoint returns the optional continuation hint for one
+// subscription. Scheduler must still verify completeness against market_bars.
+func (repository *IngestionRepository) LoadSchedulingCheckpoint(ctx context.Context, subscriptionID domain.ID) (*domain.IngestionCheckpoint, error) {
+	if subscriptionID.IsZero() {
+		return nil, fmt.Errorf("load scheduling checkpoint: %w", domain.ErrInvalidData)
+	}
+	checkpoint := domain.IngestionCheckpoint{SubscriptionID: subscriptionID}
+	err := repository.database.QueryRow(ctx, `SELECT last_success_open_time, last_closed_open_time,
+       last_attempt_at, last_success_at, consecutive_failures, updated_at
+FROM market_data.ingestion_checkpoints WHERE subscription_id = $1`, IDToDatabase(subscriptionID)).Scan(
+		&checkpoint.LastSuccessOpenTime, &checkpoint.LastClosedOpenTime, &checkpoint.LastAttemptAt,
+		&checkpoint.LastSuccessAt, &checkpoint.ConsecutiveFailures, &checkpoint.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load scheduling checkpoint: %w", MapError(err))
+	}
+	return &checkpoint, nil
+}
+
+// ListClosedBarOpenTimes reads the current closed bar facts for one scheduling
+// target and half-open task range.
+func (repository *IngestionRepository) ListClosedBarOpenTimes(ctx context.Context, target scheduler.SchedulingTarget, rangeStart, rangeEnd time.Time) ([]time.Time, error) {
+	if err := target.Validate(); err != nil || rangeStart.IsZero() || rangeEnd.IsZero() || !rangeEnd.After(rangeStart) {
+		return nil, fmt.Errorf("list closed bar open times: %w", domain.ErrInvalidData)
+	}
+	rows, err := repository.database.Query(ctx, `SELECT open_time
+FROM market_data.market_bars
+WHERE provider_instrument_id = $1 AND interval = $2
+  AND open_time >= $3 AND open_time < $4
+  AND is_current = true AND is_closed = true
+  AND quality_status IN ('valid', 'warning')
+ORDER BY open_time ASC`, IDToDatabase(target.Subscription.ProviderInstrumentID), target.Subscription.Interval,
+		TimeToDatabase(rangeStart), TimeToDatabase(rangeEnd))
+	if err != nil {
+		return nil, fmt.Errorf("list closed bar open times: %w", MapError(err))
+	}
+	defer rows.Close()
+	values := make([]time.Time, 0)
+	for rows.Next() {
+		var value time.Time
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan closed bar open time: %w", MapError(err))
+		}
+		values = append(values, value.UTC())
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate closed bar open times: %w", MapError(err))
+	}
+	return values, nil
+}
+
+// CreateScheduledBatch inserts one scheduler Run and Task atomically. A
+// byte-for-byte equivalent logical batch returns created=false; a reused key
+// describing different work remains a conflict.
+func (repository *IngestionRepository) CreateScheduledBatch(ctx context.Context, batch scheduler.ScheduledBatch) (bool, error) {
+	if err := batch.Validate(); err != nil {
+		return false, fmt.Errorf("create scheduled batch: %w", err)
+	}
+	tx, err := repository.database.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin scheduled batch: %w", MapError(err))
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var enabled bool
+	if err := tx.QueryRow(ctx, `SELECT enabled FROM market_data.collection_subscriptions WHERE id = $1 FOR SHARE`, IDToDatabase(batch.Task.SubscriptionID)).Scan(&enabled); err != nil {
+		return false, fmt.Errorf("revalidate scheduled subscription: %w", MapError(err))
+	}
+	if !enabled {
+		return false, fmt.Errorf("revalidate scheduled subscription: %w", domain.ErrInvalidState)
+	}
+	command, err := tx.Exec(ctx, `INSERT INTO market_data.ingestion_runs (id, run_key, run_type, trigger_type, status, scheduled_at, started_at, finished_at, requested_by, task_count, success_count, failed_count, context, error_summary, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 0, 0, $10::jsonb, $11::jsonb, $12) ON CONFLICT (run_key) DO NOTHING`, runArguments(batch.Run)...)
+	if err != nil {
+		return false, fmt.Errorf("insert scheduled run: %w", MapError(err))
+	}
+	if command.RowsAffected() == 0 {
+		equivalent, err := equivalentScheduledBatch(ctx, tx, batch)
+		if err != nil {
+			return false, err
+		}
+		if !equivalent {
+			return false, fmt.Errorf("scheduled run key describes different work: %w", domain.ErrConflict)
+		}
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, insertTaskSQL, taskArguments(batch.Task)...); err != nil {
+		return false, fmt.Errorf("insert scheduled task: %w", MapError(err))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit scheduled batch: %w", MapError(err))
+	}
+	return true, nil
+}
+
+func equivalentScheduledBatch(ctx context.Context, tx marketDataTransaction, batch scheduler.ScheduledBatch) (bool, error) {
+	var runType, triggerType string
+	var scheduledAt time.Time
+	var subscriptionID uuid.UUID
+	var rangeStart, rangeEnd time.Time
+	var taskCount int
+	err := tx.QueryRow(ctx, `SELECT runs.run_type, runs.trigger_type, runs.scheduled_at,
+       tasks.subscription_id, tasks.range_start, tasks.range_end,
+       count(*) OVER ()::integer
+FROM market_data.ingestion_runs AS runs
+JOIN market_data.ingestion_tasks AS tasks ON tasks.run_id = runs.id
+WHERE runs.run_key = $1`, batch.Run.RunKey).Scan(
+		&runType, &triggerType, &scheduledAt, &subscriptionID, &rangeStart, &rangeEnd, &taskCount,
+	)
+	if err != nil {
+		return false, fmt.Errorf("load existing scheduled batch: %w", MapError(err))
+	}
+	return taskCount == 1 && runType == batch.Run.RunType && triggerType == batch.Run.TriggerType &&
+		scheduledAt.Equal(TimeToDatabase(*batch.Run.ScheduledAt)) && IDFromDatabase(subscriptionID) == batch.Task.SubscriptionID &&
+		rangeStart.Equal(TimeToDatabase(batch.Task.RangeStart)) && rangeEnd.Equal(TimeToDatabase(batch.Task.RangeEnd)), nil
 }
 
 // ResolveBackfillTarget selects the same effective default mapping order used
@@ -728,3 +916,4 @@ func optionalString(value *string) any {
 var _ domain.IngestionRepository = (*IngestionRepository)(nil)
 var _ ingestion.Store = (*IngestionRepository)(nil)
 var _ ingestion.BackfillStore = (*IngestionRepository)(nil)
+var _ scheduler.IncrementalStore = (*IngestionRepository)(nil)

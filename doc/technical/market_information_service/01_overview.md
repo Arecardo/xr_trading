@@ -4,7 +4,7 @@
 
 > 文档状态：架构草案  
 > 当前阶段：已拆分专题文档，详细设计持续补充  
-> 最近更新：2026-07-01
+> 最近更新：2026-07-19
 
 ## 1. 建设目标
 
@@ -210,15 +210,15 @@ PostgreSQL
 
 已补充 Provider 适配器接口、能力声明、统一数据格式、错误分类和注册表设计，见 [Provider 适配器](./04_provider_adapter.md)。
 
-Bybit Spot 的实现约束已随 ADP-003 补充到 [Provider 适配器](./04_provider_adapter.md#811-bybit-spot-adapter-第一阶段实现)；Longbridge 美股/ETF 的 SDK 隔离、symbol、常规时段、分页、错误码和凭据约束已随 ADP-004 补充到 [Provider 适配器](./04_provider_adapter.md#812-longbridge-美股etf-adapter-第一阶段实现)。提前休市的精确 K 线关闭时间仍待 SCH-002 交易日历统一处理。
+Bybit Spot 的实现约束已随 ADP-003 补充到 [Provider 适配器](./04_provider_adapter.md#811-bybit-spot-adapter-第一阶段实现)；Longbridge 美股/ETF 的 SDK 隔离、symbol、常规时段、分页、错误码和凭据约束已随 ADP-004 补充到 [Provider 适配器](./04_provider_adapter.md#812-longbridge-美股etf-adapter-第一阶段实现)。SCH-002 已让 Longbridge、Scheduler 与 freshness 复用同一美股交易日历，统一 DST、完整休市和提前收市的 K 线关闭时间。
 
-Worker 原子认领循环、固定租约、进程内并发限制、空队列轮询和协作式停止已随 ING-001 落地；K 线 Provider 分页、结构质量校验、稳定修订 hash、checkpoint 单调推进以及带 fencing token 的最终原子事务已随 ING-002 落地；稳定错误分类、分段退避、最大尝试次数和带 fencing 的失败事务已随 ING-003 落地；同任务行锁上的协作式取消、过期租约原子恢复、恢复重试上限和旧 Worker 零污染已随 ING-004 落地；以 Task 为事实、带并发快照校验的 Run Service 汇总已随 ING-005 落地；显式单范围请求、并发防重和 Task 内 Provider 分页的 backfill 已随 ING-006 落地。具体边界见 [采集流程](./05_ingestion_flow.md#76-执行线流程) 与 [任务生命周期](./06_task_lifecycle.md#82-租约概念)。下一阶段进入 SCH-001 时间窗口计算器。
+Worker 原子认领循环、固定租约、进程内并发限制、空队列轮询和协作式停止已随 ING-001 落地；K 线 Provider 分页、结构质量校验、稳定修订 hash、checkpoint 单调推进以及带 fencing token 的最终原子事务已随 ING-002 落地；稳定错误分类、分段退避、最大尝试次数和带 fencing 的失败事务已随 ING-003 落地；同任务行锁上的协作式取消、过期租约原子恢复、恢复重试上限和旧 Worker 零污染已随 ING-004 落地；以 Task 为事实、带并发快照校验的 Run Service 汇总已随 ING-005 落地；显式单范围请求、并发防重和 Task 内 Provider 分页的 backfill 已随 ING-006 落地；Bybit 7×24 时间窗口已随 SCH-001 落地；美股官方交易日历、DST/提前收市和休市不累计 freshness 已随 SCH-002 落地；启用订阅分页扫描、close/revision 最新窗口、稳定 run_key 和跨实例 Run/Task 原子创建已随 SCH-003 落地；checkpoint 验证、行情事实缺口合并、单轮追赶上限和周期租约恢复已随 SCH-004 落地。具体边界见 [采集流程](./05_ingestion_flow.md#76-执行线流程) 与 [任务生命周期](./06_task_lifecycle.md#82-租约概念)。M3 采集闭环代码任务已经完成，下一阶段进入 ADM-001 管理订阅 API。
 
 ### 14.4 调度与补数算法
 
 已在 [采集流程](./05_ingestion_flow.md)、[任务生命周期](./06_task_lifecycle.md) 和 [API 与前端管理页面](./07_api_and_admin_ui.md) 中补充采集数据流、服务组件层次、Scheduler 与 Worker 职责、Worker 通过 `MarketDataAdapter` 复用底层适配器、checkpoint 与缺口检测原则、任务生命周期状态机、重试规则、租约概念、Run 汇总规则，以及前端采集任务管理页面的首期能力。
 
-待补充：交易日历、长任务租约续期和修订流程。
+待补充：长任务租约续期和修订流程；交易日历需按官方公告逐年扩展支持范围。
 
 ### 14.5 查询 API
 

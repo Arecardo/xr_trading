@@ -291,6 +291,8 @@ Provider 状态区分：
 - 美股交易时间使用支持夏令时、节假日和提前休市的交易日历判断，不使用固定 UTC 时间。
 - 加密货币现货按 7×24 小时连续计算，`session_type = continuous`。
 
+SCH-002 已冻结美股 scope 的底层状态投影：核心时段为 `[open,close)`；休市时强制 `not_applicable` 且 delay 为 `null`；开市时使用最近一根达到 close delay 的期望 K 线，并以核心交易时长而非墙上时钟计算落后秒数。尚无成功数据时返回 `unknown + null`。首期日历仅支持经 NYSE 官方核验的 2026～2028，越界错误不得映射成 `closed/not_applicable`，应作为日历配置故障进入健康状态和告警。ADM-005 负责把该纯计算接到数据库统计和本接口。
+
 首期不提供“立即探测 Provider”接口；实际采集任务作为 Provider 的健康观测来源。
 
 ## 4. 采集订阅 API

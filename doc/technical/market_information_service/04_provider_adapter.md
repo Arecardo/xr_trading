@@ -429,9 +429,9 @@ SDK 返回的是 Go 对象而不是原始响应字节，因此 `RawPayload` 是 
 常规交易时段 `CloseTime` 规则：
 
 - `1h` 默认是 `OpenTime + 1h`，但不得晚于该交易日美东 16:00，因此 15:30 开始的最后一根按 16:00 结束。
-- `1d` 使用 timestamp 的 UTC 日期作为交易日期，并转换为当日美东 16:00，自动覆盖普通 DST 切换。
+- `1d` 使用 timestamp 的 UTC 日期作为交易日期，并通过共享 `TradingCalendar` 转换为当日真实核心时段 close，自动覆盖普通 DST 和提前收市。
 - SDK 没有返回响应时间，`IsClosed` 仅在本地 `ReceivedAt >= CloseTime` 时为真。
-- 提前休市日无法仅靠 K 线响应推导真实 close，后续 SCH-002 接入交易日历后统一修正；在此之前 Scheduler 不应把 Adapter 推导的 16:00 当作交易日历事实。
+- SCH-002 后 Longbridge 与 Scheduler/freshness 复用 `internal/markettime.TradingCalendar`；提前休市日不再从响应猜测 16:00。首期官方日历支持 2026～2028，超出范围明确失败，扩展历史 backfill 前必须先补充经核验的年度日历。
 
 结构化错误映射：
 

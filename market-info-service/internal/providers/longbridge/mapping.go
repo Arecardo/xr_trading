@@ -12,6 +12,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion/ports"
+	"xr-trading/market-info-service/internal/markettime"
 )
 
 var usSymbolPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,123}\.US$`)
@@ -74,23 +75,43 @@ func instantFromSeconds(seconds int64) (domain.UTCInstant, error) {
 }
 
 func (adapter *Adapter) regularSessionClose(open time.Time, interval domain.BarInterval) (domain.UTCInstant, error) {
-	var local time.Time
-	if interval == domain.BarInterval1Day {
-		year, month, day := open.UTC().Date()
-		local = time.Date(year, month, day, 16, 0, 0, 0, adapter.marketLocation)
-	} else {
-		marketOpen := open.In(adapter.marketLocation)
-		year, month, day := marketOpen.Date()
-		sessionClose := time.Date(year, month, day, 16, 0, 0, 0, adapter.marketLocation)
-		local = open.Add(time.Hour)
-		if local.After(sessionClose) {
-			local = sessionClose
-		}
+	if adapter.marketCalendar == nil {
+		return domain.UTCInstant{}, fmt.Errorf("US market calendar is required")
 	}
-	if !local.After(open) {
+	var date markettime.MarketDate
+	var err error
+	if interval == domain.BarInterval1Day {
+		date, err = markettime.UTCDate(open)
+	} else {
+		date, err = markettime.DateInLocation(open, adapter.marketCalendar.Location())
+	}
+	if err != nil {
+		return domain.UTCInstant{}, err
+	}
+	session, exists, err := adapter.marketCalendar.SessionForDate(date)
+	if err != nil {
+		return domain.UTCInstant{}, err
+	}
+	if !exists {
+		return domain.UTCInstant{}, fmt.Errorf("bar belongs to a closed US market date")
+	}
+	closeAt := session.Close
+	if interval == domain.BarInterval1Hour {
+		open = open.UTC()
+		if open.Before(session.Open) || !open.Before(session.Close) || open.Sub(session.Open)%time.Hour != 0 {
+			return domain.UTCInstant{}, fmt.Errorf("hourly bar open is outside the regular US session")
+		}
+		closeAt = open.Add(time.Hour)
+		if closeAt.After(session.Close) {
+			closeAt = session.Close
+		}
+	} else if interval != domain.BarInterval1Day {
+		return domain.UTCInstant{}, fmt.Errorf("unsupported regular-session interval %q", interval)
+	}
+	if !closeAt.After(open) {
 		return domain.UTCInstant{}, fmt.Errorf("derived regular-session close does not follow open")
 	}
-	return domain.NewUTCInstant(local)
+	return domain.NewUTCInstant(closeAt)
 }
 
 func (adapter *Adapter) sdkOffset(effectiveEnd time.Time, interval domain.BarInterval) time.Time {

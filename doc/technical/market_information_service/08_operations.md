@@ -116,3 +116,19 @@ xr_market_data_runtime
 - 行情数据容量压测和 PostgreSQL 参数基线。
 - 生产环境备份、恢复目标和数据保留期限。
 - `updated_at` 自动维护采用应用写入还是数据库 trigger。
+
+## 14. 交易日历维护
+
+- 首期内置 NYSE 2026～2028 官方核心交易日历，并使用 `America/New_York` 处理 DST。
+- 日历范围外采取 fail closed；不得自动把周一到周五视为开市。进入新支持年份前必须依据 NYSE 官方页面补充完整休市和提前收市日期，并执行 markettime、scheduler 和 Longbridge 测试。
+- 临时全市场休市或临时提前收市通过 `SessionOverride` 注入；更新后需要重算尚未执行的调度窗口，已落库的错误行情通过 repair/revision 流程处理。
+- `ErrCalendarOutOfRange` 是配置/运维故障，不是正常休市；ADM-005 和后续告警不得将其降级为 `not_applicable`。
+
+## 15. Scheduler 多实例运行
+
+- 每个实例可以按相同周期调用 `IncrementalScheduler.RunOnce`，不需要 leader election；数据库唯一 `run_key` 是最终幂等边界。
+- 等价重复返回 existing，属于正常竞争结果；同 key 非等价返回 conflict，必须记录错误并告警。
+- 每个 Run/Task 使用短事务创建，Scheduler 不在事务中调用 Provider，也不跨整个订阅扫描持有数据库事务。
+- SCH-004 起每轮先恢复过期租约，再扫描订阅和缺口；恢复失败时停止本轮，防止在任务状态不确定时继续扩张队列。
+- checkpoint 前缀的全部期望 K 线必须由当前闭合有效行情验证后才能作为续采位置；失真时回退订阅启用边界。单个 Task 默认最多聚合 500 根连续缺失 K 线，单订阅每轮最多创建 20 个缺口范围，长积压通过后续周期追赶。
+- 应监控 `recovered_tasks`、`created_runs`、`existing_runs`、单轮耗时和达到 catch-up 上限的订阅；Run 缓存可能在批量租约恢复后短暂滞后，Task 始终是状态事实。

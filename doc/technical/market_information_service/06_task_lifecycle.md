@@ -105,7 +105,7 @@ status = retry_wait
 
 推荐使用 `SELECT ... FOR UPDATE SKIP LOCKED`，并在同一事务中完成状态更新。
 
-ING-004 起，普通认领不再直接选择过期的 `running` Task。过期租约必须先经过统一恢复操作，确保该次已消费的 attempt 被记录、checkpoint 失败次数被累计，并在达到 `max_attempts` 时终止；恢复动作的周期性触发由 SCH-004 接入。
+ING-004 起，普通认领不再直接选择过期的 `running` Task。过期租约必须先经过统一恢复操作，确保该次已消费的 attempt 被记录、checkpoint 失败次数被累计，并在达到 `max_attempts` 时终止；SCH-004 已在每次增量调度扫描前周期触发该恢复动作。
 
 进入 `running` 时立即增加 `attempt_count`。这意味着只要 Worker 认领过任务，就算一次尝试；即使随后网络超时或进程崩溃，也能被重试上限覆盖。
 
@@ -229,7 +229,7 @@ Run 汇总动作由以下场景触发：
 
 Repository 一次读取六种 Task 状态计数和最早 `started_at`、最晚 `finished_at`，Service 完成纯状态归约后回写 Run。保存时 Repository 会再次比较六种状态计数；如果读取后发生并发 Task 转换，则返回 conflict，Service 最多重新读取三次，避免旧快照覆盖新状态。活动 Run 的 `finished_at` 始终为空；Run 的 `started_at` 一旦写入便不倒退。
 
-成功与失败/重试转换已在 `IngestionService` 中自动触发刷新。取消和租约恢复当前仍是 Repository 原语，后续 API Service 与 SCH-004 调用这些原语后必须调用同一个 `RunService`；直接调用 Repository 不会偷偷维护第二套状态机。Run 刷新位于 Task 最终事务之后，因为它只是可重建缓存：刷新失败不能把已成功提交的行情或 Task 反向改成失败，后续转换和详情查询可继续纠偏。
+成功与失败/重试转换已在 `IngestionService` 中自动触发刷新。取消和租约恢复仍是 Repository 原语；API Service 可在明确 Run ID 时调用同一个 `RunService`，SCH-004 的批量租约恢复只保证 Task 事实立即正确，Run 查询缓存由后续状态转换或详情查询纠偏。Repository 不会偷偷维护第二套状态机。Run 刷新位于 Task 最终事务之后，因为它只是可重建缓存：刷新失败不能把已成功提交的行情或 Task 反向改成失败。
 
 `ingestion_runs.success_count`、`failed_count` 和 `task_count` 是查询加速字段，最终事实仍以 `ingestion_tasks` 为准。
 
@@ -238,3 +238,11 @@ Repository 一次读取六种 Task 状态计数和最早 `started_at`、最晚 `
 ING-006 的一次显式 backfill 固定创建一个 pending Run 和一个 pending Task；Worker 对它的认领、重试、取消、租约恢复、成功提交和 Run 汇总全部复用本章已有状态机，不引入 `backfilling` 等特殊状态。Provider 分页只发生在 Task 的一次执行内部，不改变 `attempt_count`，也不按页创建子任务。
 
 同一 Subscription 和完全相同时间范围存在活动 backfill 时拒绝创建；已有任务进入 `success/failed/canceled` 后允许产生新的 Run/Task。新任务不会重置或复用旧任务的 attempt、错误与审计记录，行情表通过 revision 规则决定重复值幂等或修订。并发防重锁只存在于 Run/Task 创建事务内，Worker 不持有 advisory lock。
+
+### 8.10 自动增量任务创建
+
+SCH-003 的自动增量和 revision 每个稳定范围只创建一次 Run/Task。与手动 backfill “终态后允许同范围再次创建”不同，自动调度 key 是永久逻辑身份：即使 Task 已进入 success、failed 或 canceled，重复扫描也不会为同一 trigger/range 新建 Task。需要重新采集时必须显式创建 backfill、repair 或后续定义的人工 retry，保留原自动任务历史。
+
+自动 Scheduler 不直接把 Run 标记为 running；原子创建后的 Run/Task 都是 pending，仍由 Worker claim Task 时进入执行生命周期，并由 RunService 根据 Task 事实刷新 Run。重复调度返回 existing 不是失败，也不改变既有 Task 的 attempt、错误、租约或状态。
+
+SCH-004 允许 close trigger 将连续缺失的期望 K 线合并成一个自动增量 Task，但不会跨越已经存在的有效闭合行情。checkpoint 失真只会让 Scheduler 从订阅启用边界重新核对，不会删除或重写 checkpoint；真正推进位置仍只发生在 Worker 成功提交事务中。单轮 catch-up 上限只限制本轮规划，后续周期继续扫描，不产生新的 Task 状态。
