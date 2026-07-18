@@ -382,6 +382,8 @@ POST /api/market-info/v1/ingestion-runs/backfill
 
 并发提交完全相同且仍处于 `pending`、`running` 或 `retry_wait` 的回填范围时返回 `409 conflict`，防止页面重复点击创建等价任务。任务完成后允许再次对同一范围发起回填，用于数据修订。
 
+ING-006 已实现该接口下层的单 Run/Task BackfillService 与 PostgreSQL 并发防重语义；`ErrBackfillAlreadyRunning -> 409 BACKFILL_ALREADY_RUNNING` 的 HTTP handler、请求 JSON 解码和权限路由仍属于 ADM-002，不在 ING-006 提前接入。
+
 ## 5. 采集 Run 与 Task 管理 API
 
 ### 5.1 Run 列表与详情

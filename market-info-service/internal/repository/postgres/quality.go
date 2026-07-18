@@ -34,11 +34,15 @@ func newDataQualityIssueRepository(database marketDataDatabase) (*DataQualityIss
 // OpenIssue creates an open quality issue. It returns false when an equivalent
 // open or acknowledged issue already exists, including when nullable dimensions match.
 func (repository *DataQualityIssueRepository) OpenIssue(ctx context.Context, issue domain.DataQualityIssue) (bool, error) {
+	return openQualityIssue(ctx, repository.database, issue)
+}
+
+func openQualityIssue(ctx context.Context, database catalogDatabase, issue domain.DataQualityIssue) (bool, error) {
 	if issue.ID.IsZero() || issue.InstrumentID.IsZero() || issue.RuleCode == "" || issue.DetectedAt.IsZero() || issue.CreatedAt.IsZero() || issue.UpdatedAt.IsZero() {
 		return false, fmt.Errorf("open quality issue: %w", domain.ErrInvalidData)
 	}
 	var id uuid.UUID
-	err := repository.database.QueryRow(ctx, `INSERT INTO market_data.data_quality_issues (id, instrument_id, provider_instrument_id, interval, open_time, rule_code, severity, status, summary, details, detected_at, resolved_at, resolution_note, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9::jsonb, $10, NULL, NULL, $11, $12) ON CONFLICT (instrument_id, provider_instrument_id, interval, open_time, rule_code) WHERE status IN ('open', 'acknowledged') DO NOTHING RETURNING id`, IDToDatabase(issue.ID), IDToDatabase(issue.InstrumentID), optionalIDToDatabase(issue.ProviderInstrumentID), optionalString(issue.Interval), optionalTimeToDatabase(issue.OpenTime), issue.RuleCode, issue.Severity, issue.Summary, jsonValue(issue.Details), TimeToDatabase(issue.DetectedAt), TimeToDatabase(issue.CreatedAt), TimeToDatabase(issue.UpdatedAt)).Scan(&id)
+	err := database.QueryRow(ctx, `INSERT INTO market_data.data_quality_issues (id, instrument_id, provider_instrument_id, interval, open_time, rule_code, severity, status, summary, details, detected_at, resolved_at, resolution_note, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9::jsonb, $10, NULL, NULL, $11, $12) ON CONFLICT (instrument_id, provider_instrument_id, interval, open_time, rule_code) WHERE status IN ('open', 'acknowledged') DO NOTHING RETURNING id`, IDToDatabase(issue.ID), IDToDatabase(issue.InstrumentID), optionalIDToDatabase(issue.ProviderInstrumentID), optionalString(issue.Interval), optionalTimeToDatabase(issue.OpenTime), issue.RuleCode, issue.Severity, issue.Summary, jsonValue(issue.Details), TimeToDatabase(issue.DetectedAt), TimeToDatabase(issue.CreatedAt), TimeToDatabase(issue.UpdatedAt)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

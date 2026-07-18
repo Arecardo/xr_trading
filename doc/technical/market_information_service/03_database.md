@@ -529,6 +529,8 @@ Worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 抢占任务并设置租约。
 
 同一个失败 Task 同时最多存在一个未结束的手动重试任务，`uq_active_manual_retry` 用于防止重复点击或并发请求创建等价任务。
 
+ING-006 的手动 backfill 防重不新增永久唯一索引。创建事务以规范化的 `subscription_id + range_start + range_end` 获取 transaction-level PostgreSQL advisory lock，再联表检查 `run_type = backfill` 且 Task 为 `pending/running/retry_wait` 的完全相同范围。这样可安全串行化跨实例并发创建，同时允许终态后重采相同范围；若在 Task 表上建立全局部分唯一索引，会错误阻止增量或手动重试任务。advisory lock 只覆盖创建短事务，不延伸到 Provider 调用或 Worker 执行期。
+
 ### 6.3 market_data.ingestion_checkpoints
 
 ```sql

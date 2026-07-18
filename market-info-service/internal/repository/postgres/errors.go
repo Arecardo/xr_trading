@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 	"errors"
+	"net"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,6 +19,13 @@ func MapError(err error) error {
 	}
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 		return errors.Join(domain.ErrNotFound, err)
+	}
+	if pgconn.SafeToRetry(err) {
+		return errors.Join(domain.ErrRetryable, err)
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		return errors.Join(domain.ErrDatabaseUnavailable, err)
 	}
 
 	var databaseError *pgconn.PgError

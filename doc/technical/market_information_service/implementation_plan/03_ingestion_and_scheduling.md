@@ -9,20 +9,20 @@
 | ADP-003 | DONE | ADP-001、ADP-002 | 已实现 Bybit V5 Spot 公共行情 Adapter：latest、1h、1d、倒序转升序、opaque cursor、限流与错误映射 | 脱敏 `httptest` fixture 覆盖请求/字段/时间/分页/错误/响应上限；真实 smoke test 仅由 `BYBIT_SMOKE=1` 手动启用；包覆盖率 95.4% |
 | ADP-004 | DONE | ADP-001、ADP-002 | 已实现 Longbridge 官方 Go SDK 美股/ETF Adapter：latest、常规时段 1h/1d、无复权、倒序分页、opaque cursor、长连接生命周期和结构化错误映射 | 脱敏 fixture 覆盖股票/ETF、DST、常规收盘、分页、错误与敏感信息隔离；真实 smoke test 仅由 `LONGBRIDGE_SMOKE=1` 手动启用；包覆盖率 88.6% |
 
-ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特殊字段泄漏到 Worker。下一步进入 ING-001 Worker claim loop。
+ADP-003 与 ADP-004 已分别通过统一端口接入，均未把 Provider 特殊字段泄漏到 Worker。ING-001～ING-006 已完成 Worker、K 线采集、自动重试、取消/租约恢复、Run 状态汇总和单任务 backfill 闭环，下一步进入 SCH-001 时间窗口计算器。
 
 ## 2. Worker 与任务生命周期
 
 | ID | 状态 | 依赖 | 输出 | 核心测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| ING-001 | TODO | DB-013、ADP-002 | Worker claim loop、租约与并发限制 | 多 Worker 不重复领取；进入 running 即增加 attempt；取消可退出 |
-| ING-002 | TODO | ING-001、DB-012、DB-014 | IngestionService：拉取、标准化、质量校验与最终事务 | 外部调用不持有长事务；最终事务校验 `running+locked_by+lease` |
-| ING-003 | TODO | ING-002 | 自动重试、指数退避、最大次数和不可重试错误 | 网络/限流进入 retry_wait；密钥/映射错误直接 failed；达到上限终止 |
-| ING-004 | TODO | ING-002 | 协作式取消与过期租约恢复 | 取消或失去租约后零行情/checkpoint 写入；旧 Worker 返回不污染数据 |
-| ING-005 | TODO | ING-002 | Run 状态 Service 汇总 | pending/running/success/partial/failed/canceled 全组合测试，Task 为最终事实 |
-| ING-006 | TODO | ING-001～005 | 单任务 backfill 执行 | 一个 Run/Task，Adapter 分页在任务内完成；重复活动范围 409 |
+| ING-001 | DONE | DB-013、ADP-002 | 已实现 Worker claim loop、固定租约参数、claim 契约校验、空队列轮询、认领错误退避、错误报告和严格的进程内并发限制 | 两个 Worker 共享队列无重复执行；单 Worker 不超过配置并发；DB-013 PostgreSQL 并发认领保证进入 `running` 即增加 attempt；取消可中断等待和执行器；新包覆盖率 95.0% 且 race 通过 |
+| ING-002 | DONE | ING-001、DB-012、DB-014 | 已实现 K 线 IngestionService：上下文加载、Registry 选择、事务外 Provider 分页、跨页去重/排序、结构质量校验、稳定 raw hash，以及行情修订/质量问题/checkpoint/Task success 最终原子事务 | 应用层包覆盖率 85.4%；故障注入证明 Provider 调用先于最终事务且任一步失败均不提交；最终事务校验 `running + attempt_count + locked_by + locked_until` fencing token 和订阅来源；真实 PostgreSQL 从 claim 到 K 线/checkpoint/success 集成测试通过 |
+| ING-003 | DONE | ING-002 | 已实现稳定错误分类、固定分段退避、Provider Retry-After 上限、最大尝试次数、脱敏错误持久化，以及带 fencing 的失败/checkpoint 原子事务 | 网络/限流/临时基础组件错误进入 retry_wait；密钥/映射/契约错误直接 failed；达到上限终止；取消/超时/租约丢失不误转换；单元故障注入和真实 PostgreSQL retry_wait→再次认领→failed 测试通过 |
+| ING-004 | DONE | ING-002 | 已实现同任务行锁上的协作式取消、终态 conflict、过期租约原子恢复、`lease_expired` 失败 checkpoint、恢复最大尝试次数和多恢复者 SKIP LOCKED 互斥 | 真实 PostgreSQL 验证运行中取消/租约恢复后旧 Worker 零行情与成功 checkpoint 污染；恢复 Task 可由下一 attempt 接管；达到上限直接 failed；两个恢复者不重复处理 |
+| ING-005 | DONE | ING-002 | 已实现独立 RunService、六种 Task 状态快照、完整 Run 状态归约、查询加速字段回写及并发快照冲突重算；采集成功/失败后自动刷新，取消、恢复和详情查询复用同一入口 | 全部 Run 状态及活动/终态混合组合已表驱动覆盖；真实 PostgreSQL 验证状态、计数、开始/结束时间；Task 始终为最终事实 |
+| ING-006 | DONE | ING-001～005 | 已实现显式单范围 BackfillService：精确解析 Provider/Instrument/interval、校验历史时间范围与审计字段、解析启用 Subscription、原子创建一个 manual backfill Run/Task；同一 Task 复用现有 Worker 完成 Adapter 分页 | PostgreSQL advisory lock 串行化完全相同的 subscription/range；并发请求一个成功、一个 `ErrBackfillAlreadyRunning`（ADM-002 映射 409）；终态后允许再次创建；真实 PostgreSQL 两页执行、行情提交与 Run success 通过 |
 
-关键事务必须同时处理行情或修订、质量问题、checkpoint、Task 状态和 Run 汇总。故障注入要证明任何一步失败都不会形成部分提交。
+关键 Task 事务必须同时处理行情或修订、质量问题、checkpoint 和 Task 状态。Run 是可由 Task 重建的查询缓存，Task 事务提交后由 Service 单独刷新；刷新失败不得回滚或反向改写已经完成的 Task，后续状态转换和 Run 详情查询会再次校正。故障注入要分别证明 Task 事务不会形成部分提交、旧 Run 快照不会覆盖较新的 Task 事实。
 
 ## 3. Scheduler 与市场时间
 

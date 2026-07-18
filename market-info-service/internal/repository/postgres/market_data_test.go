@@ -19,6 +19,7 @@ type fakeMarketDataTransaction struct {
 	exec       func(context.Context, string, ...any) (pgconn.CommandTag, error)
 	queryRow   func(context.Context, string, ...any) pgx.Row
 	query      func(context.Context, string, ...any) (pgx.Rows, error)
+	commit     func(context.Context) error
 	committed  bool
 	rolledBack bool
 }
@@ -32,7 +33,13 @@ func (tx *fakeMarketDataTransaction) QueryRow(ctx context.Context, query string,
 func (tx *fakeMarketDataTransaction) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
 	return tx.query(ctx, query, args...)
 }
-func (tx *fakeMarketDataTransaction) Commit(context.Context) error { tx.committed = true; return nil }
+func (tx *fakeMarketDataTransaction) Commit(ctx context.Context) error {
+	if tx.commit != nil {
+		return tx.commit(ctx)
+	}
+	tx.committed = true
+	return nil
+}
 func (tx *fakeMarketDataTransaction) Rollback(context.Context) error {
 	tx.rolledBack = true
 	return nil

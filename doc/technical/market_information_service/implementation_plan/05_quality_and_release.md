@@ -4,7 +4,7 @@
 
 | ID | 状态 | 依赖 | 输出 | 完成条件 |
 | --- | --- | --- | --- | --- |
-| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | 当前 statement coverage 100%，race 通过 |
+| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | 当前全量 statement coverage 90.2%，核心 ingestion 90.5%，race 通过 |
 | QA-002 | TODO | DB-006 | `integration` build tag、隔离 PostgreSQL、迁移/Repository 测试命令 | 默认单测不依赖 Docker；集成库可重复创建和清理 |
 | QA-003 | TODO | ADP-001 | Adapter fixture、fake server 和真实 smoke test 约定 | fixture 脱敏；真实测试需显式环境变量启用 |
 | QA-004 | TODO | ING-001、SCH-001 | 并发、固定时钟、固定 UUID、故障注入工具 | 租约/取消/重试/事务测试可确定性重复执行 |
@@ -50,7 +50,9 @@
 
 - [ ] Bybit/Longbridge 最小真实 smoke test 通过。
 - [ ] 增量采集、单范围 backfill、自动重试、手动重试和取消通过。
-- [ ] Worker 崩溃/租约过期后可恢复，旧 Worker 不产生数据污染。
+- [x] Worker 崩溃/租约过期后可恢复，旧 Worker 不产生数据污染（ING-004 已通过真实 PostgreSQL 并发验证；周期触发由 SCH-004 接入）。
+- [x] Run 状态由 Task 事实汇总，完整状态组合、并发快照冲突重算及 PostgreSQL 查询缓存字段已由 ING-005 验证。
+- [x] 单范围 backfill 只创建一个 Run/Task；跨实例并发防重、Task 内 Provider 分页和终态后再次回填已由 ING-006 的真实 PostgreSQL 测试验证（HTTP 管理入口仍由 ADM-002 接入）。
 - [ ] 重启根据 checkpoint 安全续采，重复调度不重复建任务。
 - [ ] 美股休市不累计延迟，加密货币按 7×24 小时计算。
 
@@ -67,4 +69,3 @@
 - [ ] 全量及核心包覆盖率不低于 80%。
 - [ ] 工作区无构建产物、覆盖率文件、凭证或临时数据库。
 - [ ] 发布候选阶段只包含缺陷修复和文档收口。
-

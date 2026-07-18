@@ -67,6 +67,7 @@ Docker Compose
 ## 10. 事务边界
 
 - 创建 Run 与其关联 Task 使用同一事务；任一任务创建失败时 Run 不进入 `running`。首期手动回填只创建一个关联 Task。
+- 完全相同活动 backfill 的并发创建使用 transaction-level advisory lock 串行检查；锁只覆盖 Run/Task 创建短事务，终态后允许同范围再次创建。
 - Task 成功时，行情写入、checkpoint 推进和 Task 状态更新使用同一事务。
 - K 线修订时，关闭旧版本和插入新版本使用同一事务。
 - Run 汇总计数可以事务内更新或从 Task 聚合重算，数据库中的 Task 状态是最终事实来源。

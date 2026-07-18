@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,6 +23,8 @@ func TestMapError(t *testing.T) {
 		{name: "invalid data", err: &pgconn.PgError{Code: "23514"}, want: domain.ErrInvalidData},
 		{name: "serialization", err: &pgconn.PgError{Code: "40001"}, want: domain.ErrRetryable},
 		{name: "connection", err: &pgconn.PgError{Code: "08006"}, want: domain.ErrDatabaseUnavailable},
+		{name: "network", err: &net.DNSError{Err: "temporary DNS failure", IsTemporary: true}, want: domain.ErrDatabaseUnavailable},
+		{name: "driver safe retry", err: retryableDriverError{}, want: domain.ErrRetryable},
 	}
 
 	for _, test := range tests {
@@ -36,6 +39,11 @@ func TestMapError(t *testing.T) {
 		})
 	}
 }
+
+type retryableDriverError struct{}
+
+func (retryableDriverError) Error() string     { return "driver retryable" }
+func (retryableDriverError) SafeToRetry() bool { return true }
 
 func TestMapErrorPassesThroughUnknownAndNil(t *testing.T) {
 	if got := MapError(nil); got != nil {

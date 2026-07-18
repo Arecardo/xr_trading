@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,12 +22,16 @@ func TestCreateRunWithTaskAndClaim(t *testing.T) {
 		executes++
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
 	}, queryRow: func(context.Context, string, ...any) pgx.Row { return nil }, query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil }}
+	var claimQuery string
 	database := fakeMarketDataDatabase{fakeCatalogDatabase: fakeCatalogDatabase{
 		exec: func(context.Context, string, ...any) (pgconn.CommandTag, error) {
 			return pgconn.NewCommandTag("UPDATE 1"), nil
 		},
-		queryRow: func(context.Context, string, ...any) pgx.Row { return taskRow(task) },
-		query:    func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
+		queryRow: func(_ context.Context, query string, _ ...any) pgx.Row {
+			claimQuery = query
+			return taskRow(task)
+		},
+		query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
 	}, begin: func(context.Context) (marketDataTransaction, error) { return tx, nil }}
 	repository, err := newIngestionRepository(database)
 	if err != nil {
@@ -39,6 +44,9 @@ func TestCreateRunWithTaskAndClaim(t *testing.T) {
 	if err != nil || claim == nil || claim.Task.ID != task.ID {
 		t.Fatalf("ClaimNextTask() = (%#v, %v)", claim, err)
 	}
+	if strings.Contains(claimQuery, "OR (status = 'running'") {
+		t.Fatalf("ClaimNextTask must not bypass expired lease recovery: %s", claimQuery)
+	}
 }
 
 func TestIngestionRepositoryControls(t *testing.T) {
@@ -48,7 +56,14 @@ func TestIngestionRepositoryControls(t *testing.T) {
 		exec: func(context.Context, string, ...any) (pgconn.CommandTag, error) {
 			return pgconn.NewCommandTag("UPDATE 2"), nil
 		},
-		queryRow: func(context.Context, string, ...any) pgx.Row {
+		queryRow: func(_ context.Context, query string, _ ...any) pgx.Row {
+			if strings.Contains(query, "WITH expired AS") {
+				return scanFunc(func(destinations ...any) error {
+					*destinations[0].(*int64) = 2
+					*destinations[1].(*int64) = 1
+					return nil
+				})
+			}
 			return scanFunc(func(...any) error { return pgx.ErrNoRows })
 		},
 		query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
@@ -57,9 +72,6 @@ func TestIngestionRepositoryControls(t *testing.T) {
 	claim, err := repository.ClaimNextTask(context.Background(), "worker", now, time.Minute)
 	if err != nil || claim != nil {
 		t.Fatalf("ClaimNextTask(empty) = (%#v, %v)", claim, err)
-	}
-	if err := repository.CancelTask(context.Background(), task.ID, "admin", "", now); err != nil {
-		t.Fatalf("CancelTask() error = %v", err)
 	}
 	if count, err := repository.RecoverExpiredTasks(context.Background(), now); err != nil || count != 2 {
 		t.Fatalf("RecoverExpiredTasks() = (%d, %v)", count, err)
@@ -78,6 +90,110 @@ func TestIngestionRepositoryControls(t *testing.T) {
 	}
 	if err := repository.UpsertCheckpoint(context.Background(), domain.IngestionCheckpoint{}); !errors.Is(err, domain.ErrInvalidData) {
 		t.Fatalf("UpsertCheckpoint(invalid) error = %v", err)
+	}
+}
+
+func TestCancelTaskLocksStateAndCommits(t *testing.T) {
+	now := time.Now().UTC()
+	_, task := testRunAndTask(now)
+	for _, status := range []string{"pending", "retry_wait", "running"} {
+		t.Run(status, func(t *testing.T) {
+			var update string
+			tx := &fakeMarketDataTransaction{
+				queryRow: func(context.Context, string, ...any) pgx.Row {
+					return scanFunc(func(destinations ...any) error {
+						*destinations[0].(*string) = status
+						return nil
+					})
+				},
+				query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
+				exec: func(_ context.Context, query string, arguments ...any) (pgconn.CommandTag, error) {
+					update = query
+					if arguments[4] != status {
+						t.Fatalf("expected status argument = %v", arguments[4])
+					}
+					return pgconn.NewCommandTag("UPDATE 1"), nil
+				},
+			}
+			repository, _ := newIngestionRepository(ingestionFakeDatabase(tx))
+			if err := repository.CancelTask(context.Background(), task.ID, "admin", "stop task", now); err != nil {
+				t.Fatalf("CancelTask() error = %v", err)
+			}
+			if !tx.committed || !tx.rolledBack || !strings.Contains(update, "next_attempt_at = NULL") || !strings.Contains(update, "locked_until = NULL") {
+				t.Fatalf("cancel committed=%t rollback=%t query=%q", tx.committed, tx.rolledBack, update)
+			}
+		})
+	}
+}
+
+func TestCancelTaskDistinguishesMissingTerminalAndRaces(t *testing.T) {
+	now := time.Now().UTC()
+	_, task := testRunAndTask(now)
+	for _, test := range []struct {
+		name       string
+		row        pgx.Row
+		updateRows int64
+		want       error
+	}{
+		{"missing", scanFunc(func(...any) error { return pgx.ErrNoRows }), 1, domain.ErrNotFound},
+		{"success", statusRow("success"), 1, domain.ErrConflict},
+		{"failed", statusRow("failed"), 1, domain.ErrConflict},
+		{"canceled", statusRow("canceled"), 1, domain.ErrConflict},
+		{"changed after lock", statusRow("running"), 0, domain.ErrConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &fakeMarketDataTransaction{
+				queryRow: func(context.Context, string, ...any) pgx.Row { return test.row },
+				query:    func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
+				exec: func(context.Context, string, ...any) (pgconn.CommandTag, error) {
+					if test.updateRows == 0 {
+						return pgconn.NewCommandTag("UPDATE 0"), nil
+					}
+					return pgconn.NewCommandTag("UPDATE 1"), nil
+				},
+			}
+			repository, _ := newIngestionRepository(ingestionFakeDatabase(tx))
+			if err := repository.CancelTask(context.Background(), task.ID, "admin", "", now); !errors.Is(err, test.want) {
+				t.Fatalf("CancelTask() error = %v", err)
+			}
+			if tx.committed || !tx.rolledBack {
+				t.Fatalf("transaction committed=%t rolledBack=%t", tx.committed, tx.rolledBack)
+			}
+		})
+	}
+}
+
+func TestRecoverExpiredTasksUsesMaxAttemptsAndFailureCheckpoint(t *testing.T) {
+	now := time.Now().UTC()
+	var query string
+	database := fakeMarketDataDatabase{fakeCatalogDatabase: fakeCatalogDatabase{
+		exec:  func(context.Context, string, ...any) (pgconn.CommandTag, error) { return pgconn.CommandTag{}, nil },
+		query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
+		queryRow: func(_ context.Context, statement string, _ ...any) pgx.Row {
+			query = statement
+			return scanFunc(func(destinations ...any) error {
+				*destinations[0].(*int64) = 3
+				*destinations[1].(*int64) = 2
+				return nil
+			})
+		},
+	}, begin: func(context.Context) (marketDataTransaction, error) { return nil, errors.New("not used") }}
+	repository, _ := newIngestionRepository(database)
+	count, err := repository.RecoverExpiredTasks(context.Background(), now)
+	if err != nil || count != 3 {
+		t.Fatalf("RecoverExpiredTasks() = (%d, %v)", count, err)
+	}
+	for _, required := range []string{"attempt_count >= max_attempts", "'failed'::varchar", "'pending'::varchar", "FOR UPDATE SKIP LOCKED", "consecutive_failures", "lease_expired"} {
+		if !strings.Contains(query, required) {
+			t.Fatalf("recovery query missing %q: %s", required, query)
+		}
+	}
+}
+
+func statusRow(status string) scanFunc {
+	return func(destinations ...any) error {
+		*destinations[0].(*string) = status
+		return nil
 	}
 }
 

@@ -212,6 +212,8 @@ PostgreSQL
 
 Bybit Spot 的实现约束已随 ADP-003 补充到 [Provider 适配器](./04_provider_adapter.md#811-bybit-spot-adapter-第一阶段实现)；Longbridge 美股/ETF 的 SDK 隔离、symbol、常规时段、分页、错误码和凭据约束已随 ADP-004 补充到 [Provider 适配器](./04_provider_adapter.md#812-longbridge-美股etf-adapter-第一阶段实现)。提前休市的精确 K 线关闭时间仍待 SCH-002 交易日历统一处理。
 
+Worker 原子认领循环、固定租约、进程内并发限制、空队列轮询和协作式停止已随 ING-001 落地；K 线 Provider 分页、结构质量校验、稳定修订 hash、checkpoint 单调推进以及带 fencing token 的最终原子事务已随 ING-002 落地；稳定错误分类、分段退避、最大尝试次数和带 fencing 的失败事务已随 ING-003 落地；同任务行锁上的协作式取消、过期租约原子恢复、恢复重试上限和旧 Worker 零污染已随 ING-004 落地；以 Task 为事实、带并发快照校验的 Run Service 汇总已随 ING-005 落地；显式单范围请求、并发防重和 Task 内 Provider 分页的 backfill 已随 ING-006 落地。具体边界见 [采集流程](./05_ingestion_flow.md#76-执行线流程) 与 [任务生命周期](./06_task_lifecycle.md#82-租约概念)。下一阶段进入 SCH-001 时间窗口计算器。
+
 ### 14.4 调度与补数算法
 
 已在 [采集流程](./05_ingestion_flow.md)、[任务生命周期](./06_task_lifecycle.md) 和 [API 与前端管理页面](./07_api_and_admin_ui.md) 中补充采集数据流、服务组件层次、Scheduler 与 Worker 职责、Worker 通过 `MarketDataAdapter` 复用底层适配器、checkpoint 与缺口检测原则、任务生命周期状态机、重试规则、租约概念、Run 汇总规则，以及前端采集任务管理页面的首期能力。
