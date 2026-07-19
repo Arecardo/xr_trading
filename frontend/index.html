@@ -83,6 +83,7 @@
           <button class="nav-item active" data-page="overview" type="button">总览</button>
           <button class="nav-item" data-page="portfolios" type="button">投资组合</button>
           <button class="nav-item" data-page="assets" type="button">资产研究</button>
+          <button class="nav-item" data-page="market-data" type="button">数据采集</button>
           <button class="nav-item" data-page="strategies" type="button">策略实验室</button>
           <button class="nav-item" data-page="backtest" type="button">回测</button>
           <button class="nav-item" data-page="trading" type="button">交易与订单</button>
@@ -164,11 +165,202 @@
         </section>
 
         <section id="page-assets" class="page">
-          <div class="page-heading"><div><p class="eyebrow">ASSET CATALOG</p><h2>资产研究</h2></div><p>使用稳定的 asset_id 统一美股、ETF、加密资产和现金。</p></div>
+          <div class="page-heading"><div><p class="eyebrow">ASSET CATALOG</p><h2>资产研究</h2></div><p>使用稳定的资产身份查看多来源最新行情，并按明确的 Instrument、Provider 与周期查询 K 线。</p></div>
           <article class="panel">
             <div class="catalog-toolbar"><input id="assetSearch" type="search" placeholder="搜索代码或资产名称" /><span id="assetCatalogCount" class="count-badge">0</span></div>
             <div id="assetCatalog" class="asset-grid"></div>
           </article>
+
+          <section class="market-query-section" aria-labelledby="marketQueryTitle">
+            <div class="panel-section-heading">
+              <div><p class="eyebrow">PUBLIC MARKET QUERY</p><h3 id="marketQueryTitle">公共行情查询</h3></div>
+              <button id="refreshMarketQueryBtn" class="secondary-btn" type="button">刷新行情</button>
+            </div>
+            <p class="provider-page-intro">联动顺序为 Asset → Instrument → Provider → Interval；页面展示默认值，并在 K 线请求中显式发送最终选择。</p>
+            <article class="panel market-query-controls">
+              <div class="market-query-linkage" aria-label="行情查询联动条件">
+                <label>Asset<select id="marketAssetSelect" required></select><code id="selectedMarketAssetCode">—</code></label>
+                <span aria-hidden="true">→</span>
+                <label>Instrument<select id="marketInstrumentSelect" required></select></label>
+                <span aria-hidden="true">→</span>
+                <label>Provider<select id="marketProviderSelect" required></select></label>
+                <span aria-hidden="true">→</span>
+                <label>Interval<select id="marketIntervalSelect" required></select></label>
+              </div>
+              <div id="marketOptionsStatus" class="market-query-status" role="status" aria-live="polite"></div>
+            </article>
+
+            <section class="market-query-grid">
+              <article class="panel market-query-result">
+                <div class="panel-heading"><div><p class="eyebrow">LATEST QUOTES</p><h3>多来源最新行情</h3></div><span id="quoteSourceCount" class="count-badge">0</span></div>
+                <div id="latestQuoteList" class="quote-list" aria-live="polite" aria-busy="false"></div>
+              </article>
+
+              <article class="panel market-query-result bar-result-panel">
+                <div class="panel-heading"><div><p class="eyebrow">MARKET BARS</p><h3>K 线</h3></div><span id="barCountBadge" class="count-badge">0</span></div>
+                <form id="barQueryForm" class="bar-query-form">
+                  <label>开始时间<input name="start_time" type="datetime-local" /></label>
+                  <label>结束时间<input name="end_time" type="datetime-local" /></label>
+                  <label>排序<select name="order"><option value="desc">由新到旧</option><option value="asc">由旧到新</option></select></label>
+                  <label>每页数量<input name="limit" type="number" min="1" max="1000" value="200" required /></label>
+                  <div id="barQueryErrors" class="form-errors hidden" role="alert"></div>
+                  <button class="primary-btn" type="submit">查询 K 线</button>
+                </form>
+                <div id="barQueryResult" class="bar-result" aria-live="polite" aria-busy="false"></div>
+                <button id="loadMoreBarsBtn" class="secondary-btn load-more hidden" type="button">加载更多</button>
+              </article>
+            </section>
+          </section>
+        </section>
+
+        <section id="page-market-data" class="page">
+          <div class="page-heading">
+            <div><p class="eyebrow">MARKET DATA OPERATIONS</p><h2>市场数据采集</h2></div>
+            <p>观察数据源健康状态，管理持续采集订阅并追踪 Run/Task 执行过程。</p>
+          </div>
+          <div class="segmented market-data-tabs" role="tablist" aria-label="数据采集管理视图">
+            <button class="segment active" data-market-data-view="providers" type="button" role="tab" aria-selected="true">数据源状态</button>
+            <button class="segment" data-market-data-view="subscriptions" type="button" role="tab" aria-selected="false">采集订阅</button>
+            <button class="segment" data-market-data-view="operations" type="button" role="tab" aria-selected="false">任务运行</button>
+          </div>
+
+          <section id="marketDataProvidersPanel" class="market-data-panel active" role="tabpanel">
+            <div class="panel-section-heading provider-page-heading">
+              <div><p class="eyebrow">PROVIDER HEALTH</p><h3>数据源状态</h3></div>
+              <div class="provider-page-actions">
+                <span id="providerCheckedAt" class="muted-note">尚未检查</span>
+                <button id="refreshProviderStatusBtn" class="secondary-btn" type="button">刷新状态</button>
+              </div>
+            </div>
+            <p class="provider-page-intro">状态来自已落库的采集任务与行情新鲜度，不会因打开页面而调用外部数据源。</p>
+            <section id="providerStatusSummary" class="metric-grid provider-summary" aria-label="数据源状态摘要"></section>
+            <section id="providerStatusContent" class="provider-status-list" aria-live="polite" aria-busy="false"></section>
+          </section>
+
+          <section id="marketDataSubscriptionsPanel" class="market-data-panel" role="tabpanel">
+            <div class="panel-section-heading">
+              <div><p class="eyebrow">COLLECTION SUBSCRIPTIONS</p><h3>采集订阅</h3></div>
+              <span id="subscriptionPermissionBadge" class="count-badge">只读</span>
+            </div>
+            <p class="provider-page-intro">订阅只影响之后的周期采集，不会隐式回填历史数据，也不会取消正在运行的任务。</p>
+
+            <article class="panel subscription-filter-panel">
+              <form id="subscriptionFilterForm" class="subscription-filter-grid">
+                <label>Provider<input name="provider" placeholder="bybit" /></label>
+                <label>Instrument code<input name="instrument_code" placeholder="instrument.bybit.spot.btc-usdt" /></label>
+                <label>周期<select name="interval"><option value="">全部</option><option value="1h">1h</option><option value="1d">1d</option></select></label>
+                <label>启用状态<select name="enabled"><option value="">全部</option><option value="true">已启用</option><option value="false">已停用</option></select></label>
+                <div class="filter-actions"><button class="secondary-btn" type="submit">查询</button><button id="resetSubscriptionFiltersBtn" class="ghost-btn" type="button">重置</button></div>
+              </form>
+            </article>
+
+            <section class="subscription-layout">
+              <article id="subscriptionCreatePanel" class="panel subscription-create-panel">
+                <div class="panel-heading"><div><p class="eyebrow">NEW SUBSCRIPTION</p><h3>创建订阅</h3></div></div>
+                <form id="subscriptionCreateForm" class="stack">
+                  <label>Provider<input name="provider" placeholder="bybit" required /></label>
+                  <label>Instrument code<input name="instrument_code" placeholder="instrument.bybit.spot.btc-usdt" required /></label>
+                  <div class="form-grid">
+                    <label>周期<select name="interval"><option value="1h">1h</option><option value="1d">1d</option></select></label>
+                    <label>优先级<input name="priority" type="number" min="0" max="32767" value="100" required /></label>
+                    <label>收盘延迟（秒）<input name="close_delay_seconds" type="number" min="0" max="2147483647" value="120" required /></label>
+                    <label>修订延迟（秒）<input name="revision_delay_seconds" type="number" min="0" max="2147483647" placeholder="留空表示关闭" /></label>
+                  </div>
+                  <label class="toggle-row"><input name="enabled" type="checkbox" checked /><span>创建后启用周期采集</span></label>
+                  <label>操作原因<textarea name="reason" rows="3" maxlength="512" placeholder="说明为什么创建此订阅" required></textarea></label>
+                  <div id="subscriptionCreateErrors" class="form-errors hidden" role="alert"></div>
+                  <button class="primary-btn" type="submit">创建订阅</button>
+                </form>
+              </article>
+
+              <article class="panel subscription-library">
+                <div class="panel-heading"><div><p class="eyebrow">SUBSCRIPTIONS</p><h3>订阅列表</h3></div><span id="subscriptionCountBadge" class="count-badge">0</span></div>
+                <div id="subscriptionList" class="subscription-list" aria-live="polite" aria-busy="false"></div>
+                <button id="loadMoreSubscriptionsBtn" class="secondary-btn load-more hidden" type="button">加载更多</button>
+              </article>
+            </section>
+          </section>
+
+          <section id="marketDataOperationsPanel" class="market-data-panel" role="tabpanel">
+            <div class="panel-section-heading">
+              <div><p class="eyebrow">INGESTION OPERATIONS</p><h3>任务运行</h3></div>
+              <button id="refreshIngestionBtn" class="secondary-btn" type="button">刷新当前视图</button>
+            </div>
+            <p class="provider-page-intro">Run 状态按 Task 事实汇总；错误区域只展示市场资讯服务已经脱敏的摘要和安全字段。</p>
+            <div class="segmented ingestion-view-tabs" role="tablist" aria-label="采集任务视图">
+              <button class="segment active" data-ingestion-view="runs" type="button" role="tab" aria-selected="true">Runs</button>
+              <button class="segment" data-ingestion-view="tasks" type="button" role="tab" aria-selected="false">Tasks</button>
+              <button class="segment" data-ingestion-view="backfill" type="button" role="tab" aria-selected="false">手动回填</button>
+            </div>
+
+            <section id="ingestionRunsView" class="ingestion-view active" role="tabpanel">
+              <article class="panel ingestion-filter-panel">
+                <form id="runFilterForm" class="ingestion-filter-grid">
+                  <label>Run 类型<select name="run_type"><option value="">全部</option><option value="incremental">增量采集</option><option value="backfill">历史回填</option><option value="repair">修复任务</option><option value="revision">修订采集</option></select></label>
+                  <label>触发方式<select name="trigger_type"><option value="">全部</option><option value="scheduler">调度器</option><option value="manual">手动</option><option value="recovery">恢复</option></select></label>
+                  <label>状态<select name="status"><option value="">全部</option><option value="pending">等待执行</option><option value="running">运行中</option><option value="partial">部分成功</option><option value="success">成功</option><option value="failed">失败</option><option value="canceled">已取消</option></select></label>
+                  <label>请求人<input name="requested_by" placeholder="local-admin" maxlength="128" /></label>
+                  <label>创建时间起<input name="created_from" type="datetime-local" /></label>
+                  <label>创建时间止<input name="created_to" type="datetime-local" /></label>
+                  <div class="filter-actions"><button class="secondary-btn" type="submit">查询 Run</button><button id="resetRunFiltersBtn" class="ghost-btn" type="button">重置</button></div>
+                  <div id="runFilterErrors" class="form-errors hidden" role="alert"></div>
+                </form>
+              </article>
+              <section class="ingestion-layout">
+                <article class="panel ingestion-library">
+                  <div class="panel-heading"><div><p class="eyebrow">RUNS</p><h3>Run 列表</h3></div><span id="runCountBadge" class="count-badge">0</span></div>
+                  <div id="runList" class="ingestion-list" aria-live="polite" aria-busy="false"></div>
+                  <button id="loadMoreRunsBtn" class="secondary-btn load-more hidden" type="button">加载更多 Run</button>
+                </article>
+                <aside id="runDetail" class="panel ingestion-detail" aria-live="polite"></aside>
+              </section>
+            </section>
+
+            <section id="ingestionTasksView" class="ingestion-view" role="tabpanel">
+              <article class="panel ingestion-filter-panel">
+                <form id="taskFilterForm" class="ingestion-filter-grid task-filter-grid">
+                  <label>Run ID<input name="run_id" placeholder="canonical UUID" /></label>
+                  <label>状态<select name="status"><option value="">全部</option><option value="pending">等待执行</option><option value="running">运行中</option><option value="retry_wait">等待重试</option><option value="success">成功</option><option value="failed">失败</option><option value="canceled">已取消</option></select></label>
+                  <label>Provider<input name="provider" placeholder="bybit" /></label>
+                  <label>Instrument code<input name="instrument_code" placeholder="instrument.bybit.spot.btc-usdt" /></label>
+                  <label>周期<select name="interval"><option value="">全部</option><option value="1h">1h</option><option value="1d">1d</option></select></label>
+                  <label>创建时间起<input name="created_from" type="datetime-local" /></label>
+                  <label>创建时间止<input name="created_to" type="datetime-local" /></label>
+                  <div class="filter-actions"><button class="secondary-btn" type="submit">查询 Task</button><button id="resetTaskFiltersBtn" class="ghost-btn" type="button">重置</button></div>
+                  <div id="taskFilterErrors" class="form-errors hidden" role="alert"></div>
+                </form>
+              </article>
+              <section class="ingestion-layout">
+                <article class="panel ingestion-library">
+                  <div class="panel-heading"><div><p class="eyebrow">TASKS</p><h3>Task 列表</h3></div><span id="taskCountBadge" class="count-badge">0</span></div>
+                  <div id="taskList" class="ingestion-list" aria-live="polite" aria-busy="false"></div>
+                  <button id="loadMoreTasksBtn" class="secondary-btn load-more hidden" type="button">加载更多 Task</button>
+                </article>
+                <aside id="taskDetail" class="panel ingestion-detail" aria-live="polite"></aside>
+              </section>
+            </section>
+
+            <section id="ingestionBackfillView" class="ingestion-view" role="tabpanel">
+              <article class="panel backfill-panel">
+                <div class="panel-heading"><div><p class="eyebrow">MANUAL BACKFILL</p><h3>发起历史回填</h3></div><span id="backfillPermissionBadge" class="count-badge">只读</span></div>
+                <p id="backfillPermissionNote" class="provider-page-intro"></p>
+                <form id="backfillForm" class="stack backfill-form">
+                  <fieldset>
+                    <div class="backfill-grid">
+                      <label>Provider<input name="provider" placeholder="bybit" required /></label>
+                      <label>Instrument code<input name="instrument_code" placeholder="instrument.bybit.spot.btc-usdt" required /></label>
+                      <label>周期<select name="interval" required><option value="1h">1h</option><option value="1d">1d</option></select></label>
+                      <label>开始时间<input name="start_time" type="datetime-local" required /></label>
+                      <label>结束时间<input name="end_time" type="datetime-local" required /></label>
+                    </div>
+                    <label>操作原因<textarea name="reason" maxlength="512" placeholder="说明回填目的和数据范围" required></textarea></label>
+                    <div id="backfillErrors" class="form-errors hidden" role="alert"></div>
+                    <div class="backfill-actions"><button class="primary-btn" type="submit">检查并提交</button></div>
+                  </fieldset>
+                </form>
+              </article>
+            </section>
+          </section>
         </section>
 
         <section id="page-strategies" class="page planned-page" data-module="策略实验室"><div class="planned-content"><span>03</span><p class="eyebrow">STRATEGY LAB</p><h2>让观点成为可版本化的策略</h2><p>下一阶段将承载策略参数、资产类型评分模型、目标权重生成和策略版本比较。</p></div></section>
@@ -186,7 +378,20 @@
       </section>
 
       <div id="toast" class="toast hidden" role="status"></div>
+      <section id="ingestionConfirmDialog" class="confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ingestionConfirmTitle">
+        <article class="panel confirm-dialog">
+          <p class="eyebrow">SECONDARY CONFIRMATION</p>
+          <h3 id="ingestionConfirmTitle">确认采集操作</h3>
+          <p id="ingestionConfirmMessage" class="confirm-message"></p>
+          <div id="ingestionConfirmError" class="form-errors hidden" role="alert"></div>
+          <div class="confirm-actions"><button id="dismissIngestionCommandBtn" class="ghost-btn" type="button">返回检查</button><button id="confirmIngestionCommandBtn" class="primary-btn" type="button">确认执行</button></div>
+        </article>
+      </section>
     </main>
+    <script src="/provider-status.js"></script>
+    <script src="/subscription-admin.js"></script>
+    <script src="/ingestion-monitor.js"></script>
+    <script src="/market-query.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

@@ -1,0 +1,7 @@
+{
+  "name": "xr-trading-web",
+  "private": true,
+  "scripts": {
+    "test:ui": "node --test --experimental-test-coverage --test-coverage-include=frontend/provider-status.js --test-coverage-include=frontend/subscription-admin.js --test-coverage-include=frontend/ingestion-monitor.js --test-coverage-include=frontend/market-query.js --test-coverage-lines=80 --test-coverage-functions=80 --test-coverage-branches=80 tests/frontend/*.test.js"
+  }
+}

@@ -4,3 +4,6 @@ data/app/*.sqlite3
 data/app/*.sqlite3-*
 coverage.out
 market-info-service/bin/
+.run/
+.env.local
+market-info-service/.env.local

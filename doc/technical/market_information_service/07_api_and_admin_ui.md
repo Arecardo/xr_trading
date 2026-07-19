@@ -581,9 +581,37 @@ GET /readyz
 | 数据源状态 | 查看 longbridge、bybit 的启用状态、最近成功时间、失败次数、延迟和健康状态 |
 | 采集订阅 | 查看和设置 `collection_subscriptions`，包括 provider instrument、周期、启停、优先级和延迟参数 |
 | 任务运行 | 查看 `ingestion_runs` 和 `ingestion_tasks`，支持按状态、provider、instrument、interval、时间范围筛选 |
-| 手动操作 | 发起手动回填、修复缺口、重试失败任务、取消未执行任务 |
+| 手动操作 | 发起单范围历史回填、重试失败任务、取消活动任务 |
 
 页面只应调用市场资讯服务提供的管理 API，不直接访问数据库。
+
+UI-001 已把“数据源状态”接入仓库现有 XR-Trading Web 页面；UI-002 在同一页面增加“采集订阅”二级页签。浏览器只使用 XR-Trading 登录会话访问同源路径，Python Web 入口再访问市场资讯服务：
+
+```text
+Browser
+  -> XR-Trading Web 精确的 Provider 状态或订阅路由
+  -> Market Information Service 同名 API
+```
+
+代理先验证 XR-Trading 登录会话，再从服务端环境读取 `MARKET_INFO_SERVICE_URL`（本地默认 `http://127.0.0.1:8090`）。只读请求使用 `MARKET_INFO_READ_BEARER_TOKEN`，管理写请求使用 `MARKET_INFO_MANAGE_BEARER_TOKEN`；首期 Go 服务仍使用单个本地管理 Token 时，后者可暂时与只读 Token 使用同一值，后续拆分上游凭据时无需修改浏览器代码。这些 Token 不得发送到浏览器；代理不提供通配转发，只接受文档列出的 Provider、订阅、Run/Task 查询和三条采集操作精确路由。市场资讯服务本地使用 `MARKET_INFO_HTTP_ADDRESS=:8090`，避免与现有 Web 入口的 8080 端口冲突。
+
+所有 XR-Trading 登录用户具有页面侧 `operations.read`；服务端 `XR_TRADING_SUBSCRIPTION_MANAGERS` 逗号分隔白名单授予 `subscriptions.manage`，`XR_TRADING_INGESTION_MANAGERS` 授予 `ingestion.manage`。白名单允许以稳定用户 ID、用户名或邮箱配置并忽略大小写；后一个变量未设置时首期复用订阅管理员名单。BFF 在调用上游前完成权限检查：普通用户可以查看、筛选订阅和任务，但不会获得相应写入口，直接请求写路由返回 403。
+
+Provider 状态面板首期按需加载并允许手工刷新，不自动轮询。页面包含加载、错误重试、空 Provider、Provider 无有效 scope、桌面和移动端展示；状态展示严格区分 configured/health，并把美股 `closed + not_applicable` 显示为“休市/停止计算”。
+
+订阅页面支持 Provider、Instrument code、interval、enabled 筛选和 cursor 续页；创建时显式提供身份、周期、启用状态、优先级、close/revision delay 与 reason，修改时只提交四个可变设置和 reason。revision delay 留空显式发送 `null`。页面按稳定 `error.code` 本地化冲突、校验、权限和服务错误，不提供 DELETE 或 `backfill_from`，也不把订阅启用误解为历史回填或运行中任务取消。
+
+UI-003 在同页增加“任务运行”页签，并以 Runs/Tasks 双视图承载 ADM-003 查询契约。Run 列表支持 type、trigger、聚合状态、requested_by 和创建时间范围，Task 列表支持 run ID、状态、Provider、Instrument、interval 和创建时间范围；两者使用后端 cursor 续页，浏览器把本地时间输入显式转换为 RFC3339 UTC。Run 详情展示 Task 真相汇总及白名单 context，并可带精确 run ID 进入 Task 视图；Task 详情只展示 API 已脱敏的 `error_summary/error_details`，不接触原始错误。
+
+BFF 为 UI-003 开放 Run/Task collection 以及 canonical UUID item 的精确 GET 路由，使用服务端 `MARKET_INFO_READ_BEARER_TOKEN`。UI-004 只额外开放 backfill 和 canonical UUID Task retry/cancel 三条精确 POST 路由，使用 `MARKET_INFO_MANAGE_BEARER_TOKEN`；其他未知路径、方法或通配写请求不会匹配代理。首期页面按需加载并手工刷新，不自动轮询。
+
+UI-004 在“任务运行”中增加“手动回填”视图，并在 Task 详情中按服务端状态机显示操作：`failed` 只可 retry，`pending/running/retry_wait` 只可 cancel，其他终态不显示写按钮。backfill 显式要求 Provider、Instrument code、`1h/1d`、有界历史时间范围和 reason，不支持批量或 `backfill_from`。三类操作提交前均展示页面内二次确认，网络请求期间锁定表单和确认按钮以避免重复点击；backfill/retry 收到 `202` 后按返回的 `run_id` 切换到 Task 视图并打开 `task_id` 详情，cancel 成功后刷新原 Task。页面按稳定 `error.code` 本地化重复活动任务、状态冲突、缺少启用订阅、权限及基础设施错误。
+
+UI-005 在“资产研究”页接入公共行情查询。Asset 选择复用现有资产目录并展示实际发送的 `asset_code`；选择 Asset 后读取 `/instruments`，把后端返回的第一个可用 Instrument、`is_default` Provider 和 `1h` 周期明确展示为默认值。当 Instrument 或 Provider 改变时，下游 Provider/Interval 选项重新计算。最新行情按 Asset 返回多来源卡片，不合并 ProviderInstrument；K 线始终显式发送 `instrument_code`、`provider` 和 `interval`，并支持本地时间转 UTC、排序、limit 和 cursor 续页。
+
+BFF 为 UI-005 只增加 `/instruments`、`/quotes/latest`、`/bars` 三条精确 GET 代理。浏览器仍只携带 XR-Trading 会话，服务端使用只读市场资讯凭据并保留上游错误 envelope 与 Request ID；其他公共行情路径和非 GET 方法不会命中代理。公共查询页面不会调用 Adapter，也不会创建采集任务。
+
+XR-Trading BFF 新增独立 `ingestion.manage` 权限。默认未配置 `XR_TRADING_INGESTION_MANAGERS` 时复用订阅管理员白名单，便于首期部署；显式配置该变量后，采集操作管理员可以与 `subscriptions.manage` 分离。浏览器只根据 `/api/users/me` 返回的 permission 控制入口可见性，BFF 仍在调用上游前执行最终权限检查。
 
 首期管理 API 清单：
 
@@ -596,6 +624,7 @@ PATCH /api/market-info/v1/collection-subscriptions/{id}
 GET  /api/market-info/v1/ingestion-runs
 GET  /api/market-info/v1/ingestion-runs/{id}
 GET  /api/market-info/v1/ingestion-tasks
+GET  /api/market-info/v1/ingestion-tasks/{id}
 
 POST /api/market-info/v1/ingestion-runs/backfill
 POST /api/market-info/v1/ingestion-tasks/{id}/retry

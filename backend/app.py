@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -15,7 +16,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,17 +32,49 @@ PORTFOLIO_STATUSES = {"draft", "active", "paused", "archived"}
 EXECUTION_MODES = {"research", "backtest", "paper", "live"}
 RISK_LEVELS = {"conservative", "moderate", "growth", "aggressive"}
 MEMBER_STATUSES = {"candidate", "approved", "restricted"}
+PERMISSION_OPERATIONS_READ = "operations.read"
+PERMISSION_SUBSCRIPTIONS_MANAGE = "subscriptions.manage"
+PERMISSION_INGESTION_MANAGE = "ingestion.manage"
+COLLECTION_SUBSCRIPTIONS_PATH = "/api/market-info/v1/collection-subscriptions"
+COLLECTION_SUBSCRIPTION_ITEM_PATTERN = re.compile(
+    r"^/api/market-info/v1/collection-subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+INGESTION_RUNS_PATH = "/api/market-info/v1/ingestion-runs"
+INGESTION_TASKS_PATH = "/api/market-info/v1/ingestion-tasks"
+INGESTION_BACKFILL_PATH = f"{INGESTION_RUNS_PATH}/backfill"
+INGESTION_RUN_ITEM_PATTERN = re.compile(
+    r"^/api/market-info/v1/ingestion-runs/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+INGESTION_TASK_ITEM_PATTERN = re.compile(
+    r"^/api/market-info/v1/ingestion-tasks/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+INGESTION_TASK_COMMAND_PATTERN = re.compile(
+    r"^/api/market-info/v1/ingestion-tasks/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/(?:retry|cancel)$"
+)
+MARKET_INFO_PUBLIC_QUERY_PATHS = {
+    "/api/market-info/v1/instruments",
+    "/api/market-info/v1/quotes/latest",
+    "/api/market-info/v1/bars",
+}
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
+def json_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
+    for name, value in (headers or {}).items():
+        if value:
+            handler.send_header(name, value)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -49,6 +84,129 @@ class AppError(Exception):
         self.status = status
         self.message = message
         super().__init__(message)
+
+
+class MarketInfoClient:
+    """Server-side credential boundary for the market information service."""
+
+    def __init__(self, base_url: str, read_bearer_token: str, manage_bearer_token: str = "", timeout: float = 3.0):
+        self.base_url = base_url.rstrip("/")
+        self.read_bearer_token = read_bearer_token
+        self.manage_bearer_token = manage_bearer_token
+        self.timeout = timeout
+
+    def provider_status(self) -> tuple[int, dict[str, Any], str]:
+        return self.request("GET", "/api/market-info/v1/providers/status")
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        query: str = "",
+        payload: dict[str, Any] | None = None,
+        manage: bool = False,
+    ) -> tuple[int, dict[str, Any], str]:
+        bearer_token = self.manage_bearer_token if manage else self.read_bearer_token
+        if not self.base_url or not bearer_token:
+            return self._unavailable("市场资讯服务代理尚未配置")
+        target = f"{self.base_url}{path}"
+        if query:
+            target += f"?{query}"
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {bearer_token}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        request = Request(
+            target,
+            data=body,
+            method=method,
+            headers=headers,
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - trusted operator configuration
+                return int(response.status), self._decode(response.read()), response.headers.get("X-Request-ID", "")
+        except HTTPError as exc:
+            return int(exc.code), self._decode(exc.read()), exc.headers.get("X-Request-ID", "")
+        except (URLError, TimeoutError, OSError):
+            return self._unavailable("市场资讯服务暂时不可用")
+
+    @staticmethod
+    def _decode(body: bytes) -> dict[str, Any]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AppError(HTTPStatus.BAD_GATEWAY, "市场资讯服务返回了无效响应") from exc
+        if not isinstance(payload, dict):
+            raise AppError(HTTPStatus.BAD_GATEWAY, "市场资讯服务返回了无效响应")
+        return payload
+
+    @staticmethod
+    def _unavailable(message: str) -> tuple[int, dict[str, Any], str]:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "error": {
+                "code": "MARKET_INFO_UNAVAILABLE",
+                "message": message,
+                "retryable": True,
+                "details": {},
+                "request_id": "",
+            }
+        }, ""
+
+
+def user_matches_allowlist(user: dict[str, Any], raw_allowlist: str) -> bool:
+    managers = {
+        value.strip().lower()
+        for value in raw_allowlist.split(",")
+        if value.strip()
+    }
+    identities = {str(user.get("id", "")).lower(), str(user.get("username", "")).lower(), str(user.get("email", "")).lower()}
+    return bool(managers.intersection(identities))
+
+
+def permissions_for_user(user: dict[str, Any]) -> list[str]:
+    permissions = [PERMISSION_OPERATIONS_READ]
+    subscription_managers = os.environ.get("XR_TRADING_SUBSCRIPTION_MANAGERS", "")
+    if user_matches_allowlist(user, subscription_managers):
+        permissions.append(PERMISSION_SUBSCRIPTIONS_MANAGE)
+    ingestion_managers = os.environ.get("XR_TRADING_INGESTION_MANAGERS", subscription_managers)
+    if user_matches_allowlist(user, ingestion_managers):
+        permissions.append(PERMISSION_INGESTION_MANAGE)
+    return permissions
+
+
+def user_with_permissions(user: dict[str, Any]) -> dict[str, Any]:
+    return {**user, "permissions": permissions_for_user(user)}
+
+
+def market_info_permission_denied(message: str = "当前研究账户没有订阅管理权限") -> tuple[int, dict[str, Any], str]:
+    return HTTPStatus.FORBIDDEN, {
+        "error": {
+            "code": "PERMISSION_DENIED",
+            "message": message,
+            "retryable": False,
+            "details": {},
+            "request_id": "",
+        }
+    }, ""
+
+
+def is_ingestion_query_path(method: str, path: str) -> bool:
+    return method == "GET" and (
+        path in {INGESTION_RUNS_PATH, INGESTION_TASKS_PATH}
+        or INGESTION_RUN_ITEM_PATTERN.fullmatch(path) is not None
+        or INGESTION_TASK_ITEM_PATTERN.fullmatch(path) is not None
+    )
+
+
+def is_ingestion_command_path(method: str, path: str) -> bool:
+    return method == "POST" and (
+        path == INGESTION_BACKFILL_PATH
+        or INGESTION_TASK_COMMAND_PATTERN.fullmatch(path) is not None
+    )
+
+
+def is_market_info_public_query_path(method: str, path: str) -> bool:
+    return method == "GET" and path in MARKET_INFO_PUBLIC_QUERY_PATHS
 
 
 class Database:
@@ -614,6 +772,11 @@ db = Database(DB_PATH)
 user_service = UserService(db)
 asset_service = AssetService(db)
 portfolio_service = PortfolioService(db, asset_service)
+market_info_client = MarketInfoClient(
+    os.environ.get("MARKET_INFO_SERVICE_URL", "http://127.0.0.1:8090"),
+    os.environ.get("MARKET_INFO_READ_BEARER_TOKEN", ""),
+    os.environ.get("MARKET_INFO_MANAGE_BEARER_TOKEN", os.environ.get("MARKET_INFO_READ_BEARER_TOKEN", "")),
+)
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -655,19 +818,82 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/auth/register" and self.command == "POST":
             payload = self.read_json()
-            json_response(self, HTTPStatus.CREATED, user_service.register(payload.get("username", ""), payload.get("email", ""), payload.get("password", "")))
+            result = user_service.register(payload.get("username", ""), payload.get("email", ""), payload.get("password", ""))
+            result["user"] = user_with_permissions(result["user"])
+            json_response(self, HTTPStatus.CREATED, result)
             return
         if path == "/api/auth/login" and self.command == "POST":
             payload = self.read_json()
-            json_response(self, HTTPStatus.OK, user_service.login(payload.get("identity", ""), payload.get("password", "")))
+            result = user_service.login(payload.get("identity", ""), payload.get("password", ""))
+            result["user"] = user_with_permissions(result["user"])
+            json_response(self, HTTPStatus.OK, result)
             return
         if path == "/api/auth/logout" and self.command == "POST":
             user_service.logout(self.require_token())
             json_response(self, HTTPStatus.OK, {"ok": True})
             return
 
-        user = self.require_user()
+        user = user_with_permissions(self.require_user())
         user_id = int(user["id"])
+        if is_market_info_public_query_path(self.command, path):
+            status, payload, request_id = market_info_client.request(
+                "GET", path, query=urlencode(query, doseq=True)
+            )
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
+        if path == "/api/market-info/v1/providers/status" and self.command == "GET":
+            status, payload, request_id = market_info_client.provider_status()
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
+        if path == COLLECTION_SUBSCRIPTIONS_PATH and self.command in {"GET", "POST"}:
+            manage = self.command == "POST"
+            if manage and PERMISSION_SUBSCRIPTIONS_MANAGE not in user["permissions"]:
+                status, payload, request_id = market_info_permission_denied()
+            else:
+                request_payload = self.read_json() if manage else None
+                status, payload, request_id = market_info_client.request(
+                    self.command,
+                    path,
+                    query=urlencode(query, doseq=True),
+                    payload=request_payload,
+                    manage=manage,
+                )
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
+        if COLLECTION_SUBSCRIPTION_ITEM_PATTERN.fullmatch(path) and self.command == "PATCH":
+            if PERMISSION_SUBSCRIPTIONS_MANAGE not in user["permissions"]:
+                status, payload, request_id = market_info_permission_denied()
+            else:
+                status, payload, request_id = market_info_client.request(
+                    "PATCH", path, payload=self.read_json(), manage=True
+                )
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
+        if is_ingestion_query_path(self.command, path):
+            status, payload, request_id = market_info_client.request(
+                "GET", path, query=urlencode(query, doseq=True)
+            )
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
+        if is_ingestion_command_path(self.command, path):
+            if PERMISSION_INGESTION_MANAGE not in user["permissions"]:
+                status, payload, request_id = market_info_permission_denied("当前研究账户没有采集操作权限")
+            else:
+                status, payload, request_id = market_info_client.request(
+                    "POST",
+                    path,
+                    query=urlencode(query, doseq=True),
+                    payload=self.read_json(),
+                    manage=True,
+                )
+            response_headers = {"X-Request-ID": request_id} if request_id else None
+            json_response(self, status, payload, response_headers)
+            return
         if path == "/api/users/me" and self.command == "GET":
             json_response(self, HTTPStatus.OK, {"user": user})
             return
