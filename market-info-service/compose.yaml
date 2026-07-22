@@ -16,5 +16,43 @@ services:
       - market-info-postgres:/var/lib/postgresql/data
       - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/local/bin/market-info-migrate"]
+    environment:
+      MARKET_INFO_MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-xr_trading}?sslmode=disable&options=-c%20role%3Dxr_market_data_owner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  market-info:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MARKET_INFO_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-xr_trading}?sslmode=disable&options=-c%20role%3Dxr_market_data_runtime
+      MARKET_INFO_HTTP_ADDRESS: :8090
+      MARKET_INFO_ADMIN_BEARER_TOKEN: ${MARKET_INFO_ADMIN_BEARER_TOKEN:-change-me-local-admin-token}
+      MARKET_INFO_ADMIN_SUBJECT: ${MARKET_INFO_ADMIN_SUBJECT:-local-admin}
+      MARKET_INFO_SHUTDOWN_TIMEOUT: ${MARKET_INFO_SHUTDOWN_TIMEOUT:-10s}
+    ports:
+      - "${MARKET_INFO_PORT:-8090}:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    stop_grace_period: 15s
+    restart: unless-stopped
+
 volumes:
   market-info-postgres:

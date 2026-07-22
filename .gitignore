@@ -7,3 +7,4 @@ market-info-service/bin/
 .run/
 .env.local
 market-info-service/.env.local
+market-info-service/backups/

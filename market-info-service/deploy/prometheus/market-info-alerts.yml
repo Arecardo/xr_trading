@@ -1,0 +1,44 @@
+groups:
+  - name: market-information-service
+    rules:
+      - alert: MarketInfoReadyFailed
+        expr: (market_info_readiness_status == 0) or absent(market_info_readiness_status)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Market information service is not ready
+          runbook: Check PostgreSQL reachability and the schema migration version.
+
+      - alert: MarketInfoProviderConsecutiveFailures
+        expr: market_info_provider_consecutive_failures >= 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Market data provider collection is repeatedly failing
+          runbook: Use the provider label and task page to inspect the latest safe error code.
+
+      - alert: MarketInfoProviderDataDelay
+        expr: |
+          (market_info_provider_data_delay_seconds{interval="1h"} >= 10800)
+          or
+          (market_info_provider_data_delay_seconds{interval="1d"} >= 259200)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Provider market data is delayed by at least three intervals
+          runbook: Closed sessions do not expose this metric; inspect active subscriptions and ingestion tasks.
+
+      - alert: MarketInfoIngestionTaskBacklog
+        expr: |
+          sum(market_info_ingestion_tasks{status=~"pending|retry_wait"}) >= 100
+          or
+          market_info_ingestion_backlog_oldest_age_seconds >= 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ingestion task backlog is above the first-phase threshold
+          runbook: Check Worker availability, Provider rate limits and retry-wait tasks.

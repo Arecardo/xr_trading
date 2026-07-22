@@ -118,11 +118,44 @@ UI-005 冻结以下实现契约：
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| OPS-001 | TODO | ENG-005 | JSON 日志及 request/run/task/provider/instrument 关联字段 | 日志脱敏和字段传播测试；正常 404 不记 ERROR |
-| OPS-002 | TODO | QRY-004、ING-005 | Prometheus `/metrics`：API、任务、Provider、延迟与积压 | 指标抓取测试；UUID、symbol、错误全文不得作标签 |
-| OPS-003 | TODO | ADM-005、OPS-002 | 首期告警建议：连续失败、数据延迟、任务积压、ready 失败 | 使用固定时间验证阈值；休市不误报 |
-| OPS-004 | TODO | DB-006、ENG-004 | Dockerfile、Compose 服务、操作说明 | 冷启动 health=200；迁移后 ready=200；重启保留数据；优雅关闭 |
-| OPS-005 | TODO | DB-005 | 最小备份恢复与数据库角色说明 | 空环境恢复演练可查询 seed 数据 |
+| OPS-001 | DONE | ENG-005 | 已实现基于 `slog` 的 JSON 日志、HTTP 访问日志/恢复中间件及 request/run/task/provider/instrument 关联字段 | 字段合并、分组与预绑定属性脱敏、query/原始错误/panic 值不泄漏、正常 404=INFO、4xx=WARN、5xx/panic=ERROR 测试通过 |
+| OPS-002 | DONE | QRY-004、ING-005 | 已实现 Prometheus `/metrics`：API、任务、Provider、延迟、积压、readiness 和 snapshot 状态 | 真实空库抓取成功；并发计数、直方图、持久事实聚合、失败降级测试通过；UUID、symbol、错误全文不作标签 |
+| OPS-003 | DONE | ADM-005、OPS-002 | 已实现连续失败、数据延迟、任务积压和 ready 失败的首期 Prometheus 规则及固定时间判定模型 | 临界值/低于阈值测试通过；美股休市和 `not_applicable` 不输出延迟指标且不告警 |
+| OPS-004 | DONE | DB-006、ENG-004 | 已实现非 root 多阶段 Dockerfile、PostgreSQL→migration→service Compose 依赖、healthcheck 和操作说明 | 独立空 volume 冷启动 health/ready=200；migration=5；重启数据保留；SIGTERM 退出码 0、无 OOM |
+| OPS-005 | DONE | DB-005 | 已实现 custom archive+SHA-256 备份、只恢复至新库的恢复脚本、runtime 授权 migration 与角色说明 | 隔离空库恢复演练通过；migration=5、runtime 查询权限及指定演练资产可查询 |
+
+OPS-001 冻结以下实现契约：
+
+- 进程日志使用 Go 标准库 `slog` 的 JSON handler，生产最低级别首期为 INFO；日志上下文可逐层合并 `request_id`、`run_id`、`task_id`、`provider`、`instrument_id` 和 `instrument_code`，UUID 仍是数据库关联身份，可读 code 用于检索和排障。
+- HTTP 中间件顺序固定为 Request ID 最外层、访问日志与 panic recovery 位于其内、业务路由位于最内层。正常响应、统一错误 envelope、panic 恢复和访问日志必须共享同一 Request ID。
+- 每个 HTTP 请求只记录一条 `http request completed` 访问事件，字段包括 method、路由模板、status、duration 和响应字节数；不记录原始 URL、query、请求/响应 body、headers、Cookie 或 Authorization。未匹配路由使用固定 `unmatched`，避免任意 path 污染日志字段。
+- 日志级别固定为：2xx/3xx 和正常 404 为 INFO，除 404 外的 4xx 为 WARN，5xx 与 recovered panic 为 ERROR。panic 只记录已恢复及响应是否已提交，不记录 panic value 或堆栈；未提交响应返回统一 `INTERNAL_ERROR` envelope。
+- backfill、retry 和 cancel 成功后记录独立的业务事件，以同一 Request ID 串联新 Run/Task；只记录稳定 ID、Provider/Instrument code 和 interval，不记录 reason、Bearer token、Provider 原始错误或响应体。
+- redacting handler 对预绑定属性、普通属性和嵌套 group 统一兜底过滤 token、secret、credential、password、signature、authorization、cookie、数据库连接串及原始 error/cause 字段。该兜底不能替代调用方约束：日志 message 必须是固定文本，不允许直接使用 `err.Error()` 或供应商消息。
+- OPS-001 不引入集中日志基础设施，也不实现 Prometheus 指标；指标端点与低基数标签由 OPS-002 单独完成。
+
+OPS-002 冻结以下实现契约：
+
+- `GET /metrics` 使用 Prometheus text exposition 0.0.4，不要求行情管理 Bearer；部署时必须仅在内部网络或监控入口暴露。scrape 自身继续经过 Request ID、访问日志和 API metrics 中间件，本次请求在下一次 scrape 可见。
+- API 指标为 `market_info_http_requests_total` 与 `market_info_http_request_duration_seconds`，标签只允许 method、ServeMux 路由模板和状态类；未知 method 收敛为 `OTHER`，未匹配路由收敛为 `unmatched`，不使用 path、query、状态全文或 Request ID。
+- Task gauge 每次 scrape 从持久化 `ingestion_tasks` 单次聚合读取六类状态和最老 pending/retry_wait 创建时间；不依赖 Worker 进程内回调，不以 Run 缓存替代 Task 事实。
+- Provider gauge 复用 ADM-005 持久事实投影，输出 bounded Provider code、health、连续失败、最后成功、scope 活跃/延迟订阅和适用数据延迟；`closed/not_applicable` scope 不输出 data delay sample。
+- 每次 scrape 独立检查 readiness 并输出 `market_info_readiness_status`；持久事实查询失败时 `/metrics` 仍返回 200，输出 `market_info_operational_snapshot_success=0` 和累计失败次数，不输出原始错误或上一次 gauge 假数据。
+- 指标标签禁止 UUID、asset/instrument symbol、provider request ID、游标、URL、用户身份和错误全文。Provider、market、session、interval、status 与 route 必须来自受控目录或枚举。
+
+OPS-003 冻结以下实现契约：
+
+- 首期规则文件为 `deploy/prometheus/market-info-alerts.yml`：ready 失败 2 分钟、Provider 连续失败达到 3 次并持续 5 分钟、数据延迟达到 3 个 interval 并持续 10 分钟、pending+retry_wait 达到 100 或最老积压达到 1 小时并持续 10 分钟。
+- `1h` 延迟阈值为 10800 秒，`1d` 为 259200 秒。美股休市由指标层直接省略 delay sample，因此 PromQL 不需要自行维护交易日历，也不会在周末/休市/提前收市后误报。
+- Go 固定时间判定模型与 Prometheus 瞬时表达式共享上述阈值，用于边界回归；Prometheus `for` 状态由监控系统维护，不写入业务数据库。
+
+OPS-004/005 冻结以下实现契约：
+
+- Docker 镜像分两阶段构建 `market-info` 和 `market-info-migrate`，运行层不包含编译器且使用非 root 用户；Compose 先等待 PostgreSQL healthy，再运行一次性 migration，成功后启动 service。
+- migration 使用 `xr_market_data_owner`，service 使用 `xr_market_data_runtime`。新增向前 migration `00005_grant_runtime_permissions.sql` 固化 schema USAGE、现有/未来表 SELECT/INSERT/UPDATE，不授予 DELETE、DDL、core 写或角色管理权限。
+- Compose healthcheck 使用 `/healthz`，应用 readiness 使用 `/readyz`；`stop_grace_period=15s` 大于默认应用 shutdown timeout。验证环境中 SIGTERM 后退出码为 0，PostgreSQL 重启后指定资产仍存在且 ready 恢复。
+- 备份使用 PostgreSQL custom archive 并生成 SHA-256；恢复脚本拒绝覆盖源库或已有目标库，失败时只清理本轮新建目标。archive 不包含 cluster roles，空集群须先执行角色/core bootstrap。
+- 恢复完成必须验证 migration 版本、runtime 读取 `core.assets`/`market_data.providers` 的权限，并可选校验指定 asset code。生产 archive 视为完整业务数据，必须外部加密、限制访问和设置保留期。
 
 ## 4. M4 退出门禁
 
@@ -130,4 +163,4 @@ UI-005 冻结以下实现契约：
 - 普通研究用户只能读取授权状态，不能执行管理写操作。
 - Provider 状态不因美股休市降级，不在查询期间探测外部 Provider。
 - 管理页面不展示 token、secret、堆栈或数据库信息。
-- 日志、指标和页面可通过 Request ID、Run ID、Task ID 串联一次操作。
+- 日志和页面可通过 Request ID、Run ID、Task ID 串联一次操作；指标只使用受控低基数维度，不把这些 UUID 作为 label。

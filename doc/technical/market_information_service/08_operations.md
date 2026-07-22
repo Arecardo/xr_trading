@@ -53,6 +53,14 @@ ADM-001 首期管理 API 使用可替换 `Authenticator` 的静态 Bearer 实现
 
 ## 13. 可观测性
 
+OPS-001 已实现 JSON 结构化日志：HTTP 请求由最外层 Request ID 与内层访问日志/panic recovery 中间件串联，访问日志只记录 method、路由模板、status、耗时和响应字节数，不记录原始 URL/query、headers、body 或原始错误。正常 404 使用 INFO，其他 4xx 使用 WARN，5xx 与 recovered panic 使用 ERROR；未提交响应的 panic 统一返回带相同 Request ID 的 `INTERNAL_ERROR`。
+
+日志上下文支持按执行层级合并 `request_id`、`run_id`、`task_id`、`provider`、`instrument_id` 和 `instrument_code`。backfill、retry、cancel 成功事件使用同一 Request ID 写入新 Run/Task 身份。底层 redacting handler 会继续过滤 token、secret、credential、password、signature、Authorization、Cookie、数据库连接串和原始 error/cause 属性，但调用方仍不得把 `err.Error()`、供应商响应或用户 reason 当作日志 message。
+
+OPS-002 已实现 `GET /metrics`。API counter/histogram 只使用 method、路由模板和状态类；Task 状态/积压与 Provider 健康、连续失败、最后成功、活跃/延迟订阅和数据延迟在 scrape 时从持久事实计算。数据库故障时 endpoint 保持可抓取并将 readiness/snapshot 状态置 0，不返回数据库错误。UUID、symbol、用户、URL、游标和错误全文禁止成为 label。
+
+首期 Prometheus 告警规则位于 `market-info-service/deploy/prometheus/market-info-alerts.yml`：ready 持续失败、连续失败达到 3 次、数据延迟达到 3 个 interval、Task 数量/年龄积压。休市 scope 不输出 delay sample，所以周末和休市不触发延迟告警。Grafana 和集中日志系统仍可在持续运行阶段按需接入，不是当前部署前置条件。
+
 第一阶段先实现：
 
 - 结构化日志。
@@ -62,7 +70,7 @@ ADM-001 首期管理 API 使用可替换 `Authenticator` 的静态 Bearer 实现
 - 数据延迟与缺口数量。
 - API 请求次数和耗时。
 
-服务应预留 Prometheus 指标接口。Grafana 和集中日志系统可在持续运行阶段按需要接入，不作为首期阻塞项。
+Prometheus 应从内部网络抓取 `/metrics`，不得把该运维端点直接暴露到公网。
 
 `/healthz` 与 `/readyz` 首期直接在市场资讯服务内实现。待多个 Go 服务的运行规范稳定后，可将健康检查路由、超时控制、响应结构和数据库 migration 兼容性检查沉淀为 Go 服务底层库，而不在第一阶段提前建设独立基础平台。
 
@@ -94,6 +102,20 @@ xr_market_data_runtime
 - 数据库迁移使用 owner 角色，服务运行时不使用 owner。
 
 跨 schema 外键由迁移角色创建，需要对目标核心表拥有 `REFERENCES` 权限。
+
+`00005_grant_runtime_permissions.sql` 将 runtime 的 `market_data` 权限固化为 USAGE 与 SELECT/INSERT/UPDATE，并通过 default privileges 覆盖后续表；不授予 DELETE、DDL 或角色管理。Docker Compose 中一次性 migration 容器与长运行 service 使用不同连接串和角色。
+
+## 11.1 容器启动与停止
+
+`market-info-service/Dockerfile` 使用 Go build stage 与非 root Alpine runtime stage。`compose.yaml` 的依赖顺序为 PostgreSQL healthy → migration 成功 → service 启动，healthcheck 指向 `/healthz`，业务依赖状态由 `/readyz` 给出。具体命令见 `market-info-service/README.md`。
+
+普通 `docker compose stop/down` 不删除 named volume；需要保留数据时禁止 `down -v`。应用收到 SIGTERM 后使用配置的 shutdown timeout 等待 HTTP 请求退出，Compose grace period 必须更长。
+
+## 11.2 备份恢复
+
+`scripts/backup.sh` 生成 PostgreSQL custom archive 和 SHA-256；`scripts/restore.sh` 只允许恢复至不同于源库、尚不存在的新数据库，并验证角色、migration、runtime 读取权限及可选 asset code。失败恢复只删除本轮新建目标库，不修改源库。
+
+archive 不含 cluster roles；全新 PostgreSQL 实例先执行 `deploy/postgres/init/001_roles_and_core.sql` 或等价基础设施代码。备份包含目录、行情、任务和审计数据，应加密保存并进行访问控制。首期不实现远端对象存储、自动保留期或跨地域复制。
 
 ## 12. 分区与容量演进
 

@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"xr-trading/market-info-service/internal/application"
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion"
+	"xr-trading/market-info-service/internal/observability"
 )
 
 const ingestionTaskCommandPath = "/api/market-info/v1/ingestion-tasks/{task_id}"
@@ -63,7 +65,12 @@ func (handler *IngestionTaskCommandHandler) retry(writer http.ResponseWriter, re
 	}
 	if err := WriteJSON(writer, http.StatusAccepted, response); err != nil {
 		WriteError(writer, request, err)
+		return
 	}
+	logContext := observability.WithCorrelation(request.Context(), observability.CorrelationFields{RunID: result.RunID, TaskID: result.TaskID})
+	observability.LoggerFromContext(logContext).InfoContext(logContext, "ingestion task retry accepted",
+		slog.String("retry_of_task_id", taskID.String()),
+	)
 }
 
 func (handler *IngestionTaskCommandHandler) cancel(writer http.ResponseWriter, request *http.Request) {
@@ -87,7 +94,10 @@ func (handler *IngestionTaskCommandHandler) cancel(writer http.ResponseWriter, r
 	}
 	if err := WriteJSON(writer, http.StatusOK, response); err != nil {
 		WriteError(writer, request, err)
+		return
 	}
+	logContext := observability.WithCorrelation(request.Context(), observability.CorrelationFields{RunID: result.RunID, TaskID: result.TaskID})
+	observability.LoggerFromContext(logContext).InfoContext(logContext, "ingestion task canceled")
 }
 
 type taskCommandRequest struct {

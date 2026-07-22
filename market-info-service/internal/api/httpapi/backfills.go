@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"xr-trading/market-info-service/internal/application"
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion"
+	"xr-trading/market-info-service/internal/observability"
 )
 
 const ingestionBackfillPath = "/api/market-info/v1/ingestion-runs/backfill"
@@ -69,7 +71,16 @@ func (handler *BackfillHandler) create(writer http.ResponseWriter, request *http
 	}
 	if err := WriteJSON(writer, http.StatusAccepted, response); err != nil {
 		WriteError(writer, request, err)
+		return
 	}
+	provider, _ := domain.ParseCode(input.ProviderCode)
+	instrumentCode, _ := domain.ParseCode(input.InstrumentCode)
+	logContext := observability.WithCorrelation(request.Context(), observability.CorrelationFields{
+		RunID: result.RunID, TaskID: result.TaskID, Provider: provider, InstrumentCode: instrumentCode,
+	})
+	observability.LoggerFromContext(logContext).InfoContext(logContext, "ingestion backfill accepted",
+		slog.String("interval", input.Interval),
+	)
 }
 
 type createBackfillRequest struct {

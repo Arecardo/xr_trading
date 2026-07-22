@@ -4,7 +4,7 @@
 
 | ID | 状态 | 依赖 | 输出 | 完成条件 |
 | --- | --- | --- | --- | --- |
-| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | ADM-005 后全量 statement coverage 87.9%，核心 application 89.1%、HTTP API 86.3%、ingestion 89.1%、scheduler 88.5%、repository 84.9%，race 通过 |
+| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | OPS-005 后全量 statement coverage 88.1%，observability 94.1%、application 89.1%、HTTP API 86.2%、ingestion 89.1%、scheduler 88.5%、repository 84.9%，race 通过 |
 | QA-002 | TODO | DB-006 | `integration` build tag、隔离 PostgreSQL、迁移/Repository 测试命令 | 默认单测不依赖 Docker；集成库可重复创建和清理 |
 | QA-003 | TODO | ADP-001 | Adapter fixture、fake server 和真实 smoke test 约定 | fixture 脱敏；真实测试需显式环境变量启用 |
 | QA-004 | TODO | ING-001、SCH-001 | 并发、固定时钟、固定 UUID、故障注入工具 | 租约/取消/重试/事务测试可确定性重复执行 |
@@ -36,9 +36,9 @@
 ### 数据库与启动
 
 - [ ] 空库 migration、逐版本升级和重复执行检查通过。
-- [ ] runtime 与 migration 数据库角色权限符合设计。
-- [ ] Compose 冷启动、重启保留数据、优雅关闭和 ready 故障恢复通过。
-- [ ] 备份恢复演练后可以查询 seed 数据。
+- [x] runtime 与 migration 数据库角色权限符合设计；00005 向前 migration 固化最小授权并通过隔离 PostgreSQL 验证。
+- [x] Compose 独立空 volume 冷启动、PostgreSQL 重启保留演练资产、SIGTERM 退出码 0 和 ready 恢复通过。
+- [x] custom archive+checksum 备份恢复演练后，可用 runtime 查询指定演练资产与 migration 版本。
 
 ### 行情查询
 
@@ -61,8 +61,8 @@
 ### 管理、安全与运维
 
 - [ ] 权限、操作者、reason 和 Request ID 审计信息完整（ADM-001 订阅创建/修改、ADM-002 backfill 与 ADM-004 retry/cancel 已通过真实 PostgreSQL HTTP 契约验证；后续管理写 API 继续沿用同一门禁）。
-- [ ] API、页面和日志不泄漏 Provider 凭证、连接串或堆栈。
-- [ ] Provider 状态、任务积压、失败和数据延迟有日志/指标/告警建议。
+- [x] API、页面和日志不泄漏 Provider 凭证、连接串或堆栈；OPS-001/002 增加日志与指标脱敏回归。
+- [x] Provider 状态、任务积压、失败和数据延迟已有持久事实指标与 Prometheus 告警规则，休市不误报。
 - [ ] 文档、配置示例、migration 与实际行为一致。
 
 ### 质量门禁

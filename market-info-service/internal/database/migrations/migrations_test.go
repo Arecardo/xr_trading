@@ -108,6 +108,28 @@ func TestInitialMigrationsContainDesignedObjects(t *testing.T) {
 	}
 }
 
+func TestRuntimeGrantMigrationUsesDedicatedRolesAndNoDeletePrivilege(t *testing.T) {
+	t.Parallel()
+
+	migrationFS, err := Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := fs.ReadFile(migrationFS, "00005_grant_runtime_permissions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{"xr_market_data_owner", "xr_market_data_runtime", "GRANT USAGE", "GRANT SELECT, INSERT, UPDATE", "ALTER DEFAULT PRIVILEGES"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("runtime grant migration does not contain %q", expected)
+		}
+	}
+	if strings.Contains(text, "GRANT DELETE") || strings.Contains(text, "GRANT ALL") {
+		t.Fatalf("runtime grant migration is over-privileged: %s", text)
+	}
+}
+
 func TestPrepareSchema(t *testing.T) {
 	t.Parallel()
 

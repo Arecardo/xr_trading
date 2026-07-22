@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,7 +48,9 @@ func entrypoint() int {
 	defer stop()
 
 	if err := run(ctx, os.Args[1:], config.Load, openPostgresPool, server.New); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		observability.NewJSONLogger(os.Stderr, slog.LevelInfo).
+			With(slog.String("service", "market-info-service")).
+			Error("market information service stopped", slog.String("error_code", "service_failed"))
 		return 1
 	}
 	return 0
@@ -149,6 +152,15 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err != nil {
 		return fmt.Errorf("create provider status service: %w", err)
 	}
+	operationalMetrics, err := observability.NewOperationalMetricsSource(ingestionRepository, providerStatuses)
+	if err != nil {
+		return fmt.Errorf("create operational metrics source: %w", err)
+	}
+	metrics := observability.NewMetrics()
+	metricsHandler, err := observability.NewMetricsHandler(metrics, operationalMetrics, checker, cfg.ReadinessTimeout, time.Now)
+	if err != nil {
+		return fmt.Errorf("create metrics handler: %w", err)
+	}
 	adminPrincipal, err := application.NewPrincipal(
 		cfg.AdminSubject, application.ActorTypeUser,
 		application.PermissionOperationsRead,
@@ -164,6 +176,9 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	}
 	mux := http.NewServeMux()
 	health.Register(mux)
+	if err := metricsHandler.Register(mux); err != nil {
+		return fmt.Errorf("register metrics route: %w", err)
+	}
 	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{
 		InstrumentOptions: instrumentOptions,
 		LatestQuotes:      latestQuotes,
@@ -186,7 +201,13 @@ func run(ctx context.Context, args []string, load loadConfig, open openPool, cre
 	if err := httpapi.RegisterProviderStatusRoutes(mux, providerStatuses, authenticator); err != nil {
 		return fmt.Errorf("register provider status routes: %w", err)
 	}
-	handler := httpapi.WithRequestID(mux)
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo).With(slog.String("service", "market-info-service"))
+	observeHTTP, err := httpapi.NewObservabilityMiddleware(logger, time.Now, metrics)
+	if err != nil {
+		return fmt.Errorf("create HTTP observability middleware: %w", err)
+	}
+	// Request ID is outermost so recovery and every access event share it.
+	handler := httpapi.WithRequestID(observeHTTP(mux))
 
 	httpServer, err := createServer(server.Config{
 		Address:         cfg.HTTPAddress,

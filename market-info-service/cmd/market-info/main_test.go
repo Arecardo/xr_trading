@@ -24,7 +24,7 @@ func TestRunServeWiresDependencies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	db := &stubPool{version: 4}
+	db := &stubPool{version: 5}
 	var openedConfig postgres.Config
 	var serverConfig server.Config
 	err := run(ctx, []string{"serve"}, validRuntimeConfig, func(_ context.Context, cfg postgres.Config) (pooledDB, error) {
@@ -39,6 +39,11 @@ func TestRunServeWiresDependencies(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		if response.Code != http.StatusOK || !httpapi.ValidRequestID(response.Header().Get(httpapi.RequestIDHeader)) {
 			t.Fatalf("health response is missing request ID: status=%d header=%q", response.Code, response.Header().Get(httpapi.RequestIDHeader))
+		}
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "market_info_readiness_status 1") || !strings.Contains(response.Body.String(), "market_info_operational_snapshot_success 0") {
+			t.Fatalf("metrics route is not wired: status=%d body=%s", response.Code, response.Body.String())
 		}
 		response = httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/market-info/v1/instruments?asset_code=asset.crypto.missing", nil))
@@ -138,7 +143,7 @@ func TestRunDefaultsToServeMode(t *testing.T) {
 	cancel()
 
 	err := run(ctx, nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
-		return &stubPool{version: 4}, nil
+		return &stubPool{version: 5}, nil
 	}, server.New)
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
@@ -157,10 +162,10 @@ func TestRunRejectsInvalidInput(t *testing.T) {
 		wantError string
 	}{
 		{"missing dependency", nil, nil, nil, nil, "serve dependencies are required"},
-		{"unsupported mode", []string{"worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 4}, nil }, server.New, "unsupported mode"},
-		{"config error", nil, func() (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 4}, nil }, server.New, "load configuration"},
+		{"unsupported mode", []string{"worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "unsupported mode"},
+		{"config error", nil, func() (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "load configuration"},
 		{"open error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return nil, errors.New("db down") }, server.New, "open database pool"},
-		{"server error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 4}, nil }, func(server.Config, http.Handler) (*server.Server, error) { return nil, errors.New("bad server") }, "create HTTP server"},
+		{"server error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, func(server.Config, http.Handler) (*server.Server, error) { return nil, errors.New("bad server") }, "create HTTP server"},
 	}
 
 	for _, tt := range tests {
@@ -206,6 +211,9 @@ func (s *stubPool) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
 	if strings.Contains(query, "core.assets") || strings.Contains(query, "core.instruments") {
 		return stubErrorRow{err: pgx.ErrNoRows}
 	}
+	if strings.Contains(query, "count(*) FILTER (WHERE status = 'pending')") {
+		return stubMetricsRow{}
+	}
 	return stubRow{version: s.version}
 }
 
@@ -240,4 +248,14 @@ type stubErrorRow struct {
 
 func (s stubErrorRow) Scan(...any) error {
 	return s.err
+}
+
+type stubMetricsRow struct{}
+
+func (stubMetricsRow) Scan(destinations ...any) error {
+	for index := 0; index < 6; index++ {
+		*destinations[index].(*int64) = 0
+	}
+	*destinations[6].(**time.Time) = nil
+	return nil
 }

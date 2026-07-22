@@ -17,7 +17,7 @@ DB-001～003 完成前不得冻结初始 migration。
 | ENG-001 | DONE | 无 | Go 开发规范 | 文档已索引 |
 | ENG-002 | DONE | ENG-001 | `go.mod`、配置包、HTTP Server、health handler | 单测、race、coverage 通过 |
 | ENG-004 | READY | DB-001 | `cmd/market-info`、`serve/worker/all` 模式解析、信号与依赖装配 | 启动参数、取消、错误退出单测；二进制可构建 |
-| ENG-005 | READY | ENG-002 | 结构化日志、Request ID、panic recovery、统一错误 envelope | middleware 顺序、ID 传播、脱敏、错误映射单测 |
+| ENG-005 | DONE | ENG-002 | 已实现结构化日志、Request ID、panic recovery、统一错误 envelope | middleware 顺序、ID 传播、脱敏、错误映射单测通过；运行期日志不输出原始错误或 panic value |
 | ENG-006 | TODO | ENG-004、DB-004 | 示例配置和启动 README | 缺必填配置快速失败；示例不含有效凭证 |
 
 ## 3. Migration 与本地 PostgreSQL
