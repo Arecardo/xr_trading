@@ -59,3 +59,55 @@ docker compose --env-file .env.example exec -T postgres \
 ```
 
 custom archive 不包含 cluster role 定义；空 PostgreSQL 实例必须先运行 `deploy/postgres/init/001_roles_and_core.sql`，生产环境则由基础设施代码创建等价角色。备份文件可能包含完整行情和目录数据，应按生产数据加密、限制访问并设置保留期。
+
+## 隔离 PostgreSQL 集成测试
+
+普通单元测试不访问 Docker 或 PostgreSQL：
+
+```bash
+make test
+```
+
+集成测试使用一次性的 Compose project、随机宿主端口和独立 named volume，自动初始化 `core`、执行最新 migration，并在成功或失败后清理容器和 volume：
+
+```bash
+make test-integration
+```
+
+每次执行都是空库，不会读写开发库。排查失败时可临时保留环境；完成排查后必须用输出的 project 名显式清理：
+
+```bash
+MARKET_INFO_INTEGRATION_KEEP=1 make test-integration
+docker compose --project-name <project> --env-file .env.example down --volumes
+```
+
+`make test-integration-existing` 只作为已准备好一次性数据库时的逃生入口，需要显式设置 `MARKET_INFO_ALLOW_EXISTING_INTEGRATION=1`，并由调用方提供三个数据库 URL、执行 migration 和负责清理；CI 和日常验收统一使用隔离命令。
+
+## Adapter 测试与真实 smoke
+
+Adapter 默认测试完全离线：Bybit 使用只监听本机随机端口的 `httptest.Server`，Longbridge 在官方 SDK Client 接口处注入 fake。两者均使用 `internal/providers/*/testdata` 中的脱敏 JSON fixture；测试会校验 fixture 是有效 JSON，且不包含凭据字段、Bearer 值或私钥标记。
+
+```bash
+make test-adapters
+```
+
+真实 Provider smoke test 同时要求 `smoke` build tag 和显式环境变量，普通 `go test ./...` 即使继承了凭据或 smoke 开关也不会访问外网：
+
+```bash
+BYBIT_SMOKE=1 make smoke-bybit
+LONGBRIDGE_SMOKE=1 make smoke-longbridge
+```
+
+Bybit 首期只访问公共 Spot 行情，不读取 API Key；可用 `BYBIT_BASE_URL` 指定官方测试网或区域端点。Longbridge 由官方 SDK 读取 `LONGBRIDGE_*` 配置，必须从本地 secret 或部署平台注入最小只读行情权限。真实 smoke 不进入普通 CI，输出、fixture 和提交内容中不得包含凭据或原始敏感响应。
+
+## 持续集成
+
+GitHub Actions 在 Pull Request、`master` push 和人工触发时运行以下独立门禁：
+
+- `make fmt-check tidy-check vet`
+- `make coverage`，全量 statement coverage 不低于 80%
+- `make test-race`
+- `make test-integration`，使用自动销毁的隔离 PostgreSQL
+- `make build`，构建服务和 migration 两个 Linux 二进制
+
+覆盖率 profile 和构建产物保留 14 天。普通 CI 不读取 Provider 凭据、不执行真实 smoke，也不部署任何环境。开发者提交前可用 `make check` 执行不依赖 Docker 的同等本地门禁；`make fmt` 仅用于主动格式化代码。

@@ -16,12 +16,12 @@ import (
 	"xr-trading/market-info-service/internal/ingestion/ports"
 	"xr-trading/market-info-service/internal/providers"
 	repositorypostgres "xr-trading/market-info-service/internal/repository/postgres"
+	"xr-trading/market-info-service/internal/testkit"
 )
 
 type ing004BlockingAdapter struct {
 	providerCode domain.Code
-	started      chan struct{}
-	release      chan struct{}
+	gate         *testkit.Gate
 }
 
 func (adapter *ing004BlockingAdapter) ProviderCode() domain.Code { return adapter.providerCode }
@@ -32,16 +32,10 @@ func (*ing004BlockingAdapter) FetchLatestQuotes(context.Context, []ports.Provide
 	return nil, errors.New("not implemented")
 }
 func (adapter *ing004BlockingAdapter) FetchBars(ctx context.Context, request ports.FetchBarsRequest) (ports.FetchBarsResult, error) {
-	select {
-	case adapter.started <- struct{}{}:
-	default:
+	if err := adapter.gate.Wait(ctx); err != nil {
+		return ports.FetchBarsResult{}, err
 	}
-	select {
-	case <-adapter.release:
-		return (&ing002Adapter{providerCode: adapter.providerCode}).FetchBars(ctx, request)
-	case <-ctx.Done():
-		return ports.FetchBarsResult{}, ctx.Err()
-	}
+	return (&ing002Adapter{providerCode: adapter.providerCode}).FetchBars(ctx, request)
 }
 
 type ing004Fixture struct {
@@ -63,7 +57,8 @@ func TestING004RunningCancellationFencesOldWorkerAgainstPostgres(t *testing.T) {
 	if err != nil || claim == nil || claim.Task.ID != fixture.task.ID {
 		t.Fatalf("ClaimNextTask() = (%#v, %v)", claim, err)
 	}
-	adapter := &ing004BlockingAdapter{providerCode: fixture.provider.Code, started: make(chan struct{}, 1), release: make(chan struct{})}
+	gate := testkit.NewGate()
+	adapter := &ing004BlockingAdapter{providerCode: fixture.provider.Code, gate: gate}
 	registry, err := providers.NewRegistry(ctx, adapter)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
@@ -72,12 +67,14 @@ func TestING004RunningCancellationFencesOldWorkerAgainstPostgres(t *testing.T) {
 	service, _ := ingestion.NewService(ingestion.Config{BarsPerPage: 100, MaximumPages: 10}, fixture.store, registry, ingestion.NewStructuralBarQualityValidator(), func() time.Time { return finishedAt })
 	result := make(chan error, 1)
 	go func() { result <- service.ExecuteTask(ctx, *claim) }()
-	<-adapter.started
+	if err := gate.AwaitEntered(ctx); err != nil {
+		t.Fatalf("wait for old worker Provider call: %v", err)
+	}
 	canceledAt := fixture.now.Add(500 * time.Millisecond)
 	if err := fixture.store.CancelTask(ctx, fixture.task.ID, "admin", "incorrect range", canceledAt); err != nil {
 		t.Fatalf("CancelTask() error = %v", err)
 	}
-	close(adapter.release)
+	gate.Release()
 	if err := <-result; !errors.Is(err, ingestion.ErrTaskLeaseLost) {
 		t.Fatalf("old ExecuteTask() error = %v", err)
 	}
@@ -107,13 +104,16 @@ func TestING004ExpiredLeaseRecoversAndFencesOldWorkerAgainstPostgres(t *testing.
 	if err != nil || claim == nil || claim.Task.ID != fixture.task.ID {
 		t.Fatalf("ClaimNextTask() = (%#v, %v)", claim, err)
 	}
-	adapter := &ing004BlockingAdapter{providerCode: fixture.provider.Code, started: make(chan struct{}, 1), release: make(chan struct{})}
+	gate := testkit.NewGate()
+	adapter := &ing004BlockingAdapter{providerCode: fixture.provider.Code, gate: gate}
 	registry, _ := providers.NewRegistry(ctx, adapter)
 	oldFinishedAt := fixture.now.Add(500 * time.Millisecond)
 	service, _ := ingestion.NewService(ingestion.Config{BarsPerPage: 100, MaximumPages: 10}, fixture.store, registry, ingestion.NewStructuralBarQualityValidator(), func() time.Time { return oldFinishedAt })
 	oldResult := make(chan error, 1)
 	go func() { oldResult <- service.ExecuteTask(ctx, *claim) }()
-	<-adapter.started
+	if err := gate.AwaitEntered(ctx); err != nil {
+		t.Fatalf("wait for expired worker Provider call: %v", err)
+	}
 
 	recoveredAt := fixture.now.Add(2 * time.Second)
 	type recoveryResult struct {
@@ -156,7 +156,7 @@ FROM market_data.ingestion_checkpoints WHERE subscription_id = $1`, fixture.subs
 	if !lastAttemptAt.Equal(recoveredAt) || lastSuccessOpenTime != nil || consecutiveFailures != 1 {
 		t.Fatalf("recovery checkpoint attempt=%v successOpen=%v failures=%d", lastAttemptAt, lastSuccessOpenTime, consecutiveFailures)
 	}
-	close(adapter.release)
+	gate.Release()
 	if err := <-oldResult; !errors.Is(err, ingestion.ErrTaskLeaseLost) {
 		t.Fatalf("old ExecuteTask() error = %v", err)
 	}

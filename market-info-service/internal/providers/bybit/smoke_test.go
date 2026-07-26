@@ -1,3 +1,5 @@
+//go:build smoke
+
 package bybit
 
 import (
@@ -11,7 +13,8 @@ import (
 )
 
 // TestSmokePublicMarketData is intentionally opt-in and uses only public
-// market endpoints. Run with BYBIT_SMOKE=1 and an optional BYBIT_BASE_URL.
+// market endpoints. Run with BYBIT_SMOKE=1 make smoke-bybit and an optional
+// BYBIT_BASE_URL.
 func TestSmokePublicMarketData(t *testing.T) {
 	if os.Getenv("BYBIT_SMOKE") != "1" {
 		t.Skip("set BYBIT_SMOKE=1 to call the public Bybit API")

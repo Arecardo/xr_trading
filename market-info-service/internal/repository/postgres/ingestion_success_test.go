@@ -14,6 +14,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/ingestion"
+	"xr-trading/market-info-service/internal/testkit"
 )
 
 func TestLoadExecutionContext(t *testing.T) {
@@ -136,6 +137,7 @@ func TestCommitSuccessRollsBackEveryPartialFailure(t *testing.T) {
 	databaseFailure := &pgconn.PgError{Code: "08006"}
 	for _, failureAt := range []string{"begin", "bar", "checkpoint", "task", "commit"} {
 		t.Run(failureAt, func(t *testing.T) {
+			faults := testkit.NewFaultPlan(map[string][]error{failureAt: {databaseFailure}})
 			tx := &fakeMarketDataTransaction{
 				query: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil },
 				queryRow: func(_ context.Context, query string, _ ...any) pgx.Row {
@@ -152,24 +154,26 @@ func TestCommitSuccessRollsBackEveryPartialFailure(t *testing.T) {
 				},
 			}
 			tx.exec = func(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
+				point := ""
 				switch {
-				case failureAt == "bar" && strings.Contains(query, "market_bars"):
-					return pgconn.CommandTag{}, databaseFailure
-				case failureAt == "checkpoint" && strings.Contains(query, "ingestion_checkpoints"):
-					return pgconn.CommandTag{}, databaseFailure
-				case failureAt == "task" && strings.Contains(query, "ingestion_tasks"):
-					return pgconn.NewCommandTag("UPDATE 0"), nil
-				default:
-					return pgconn.NewCommandTag("UPDATE 1"), nil
+				case strings.Contains(query, "market_bars"):
+					point = "bar"
+				case strings.Contains(query, "ingestion_checkpoints"):
+					point = "checkpoint"
+				case strings.Contains(query, "ingestion_tasks"):
+					point = "task"
 				}
+				if point == failureAt {
+					return pgconn.CommandTag{}, faults.Check(point)
+				}
+				return pgconn.NewCommandTag("UPDATE 1"), nil
 			}
 			if failureAt == "commit" {
-				txCommit := errors.New("commit failed")
-				tx.commit = func(context.Context) error { return txCommit }
+				tx.commit = func(context.Context) error { return faults.Check("commit") }
 			}
 			database := ingestionFakeDatabase(tx)
 			if failureAt == "begin" {
-				database.begin = func(context.Context) (marketDataTransaction, error) { return nil, databaseFailure }
+				database.begin = func(context.Context) (marketDataTransaction, error) { return nil, faults.Check("begin") }
 			}
 			repository, _ := newIngestionRepository(database)
 			err := repository.CommitSuccess(context.Background(), request)
@@ -178,6 +182,9 @@ func TestCommitSuccessRollsBackEveryPartialFailure(t *testing.T) {
 			}
 			if failureAt != "begin" && !tx.rolledBack {
 				t.Fatal("transaction was not rolled back")
+			}
+			if faults.Hits(failureAt) != 1 || faults.Remaining(failureAt) != 0 {
+				t.Fatalf("fault point %s hits=%d remaining=%d", failureAt, faults.Hits(failureAt), faults.Remaining(failureAt))
 			}
 		})
 	}

@@ -388,7 +388,7 @@ Bybit K 线接口没有原生 cursor，且返回离 `end` 最近的数据。Adap
 普通测试使用 `httptest` 与脱敏 JSON fixture，不访问外网。真实公共行情 smoke test 必须显式启用：
 
 ```bash
-BYBIT_SMOKE=1 go test ./internal/providers/bybit -run TestSmokePublicMarketData -count=1
+BYBIT_SMOKE=1 make smoke-bybit
 ```
 
 可通过 `BYBIT_BASE_URL` 指向测试网或区域域名；不设置时使用 `https://api.bybit.com`。
@@ -447,7 +447,7 @@ Longbridge QuoteContext 持有长连接。生产 bootstrap 通过 `NewFromEnviro
 普通测试使用可注入 fake Client 和脱敏 JSON fixture，不访问外网。真实 smoke test 必须显式配置最小行情权限凭据并启用：
 
 ```bash
-LONGBRIDGE_SMOKE=1 go test ./internal/providers/longbridge -run TestSmokeMarketData -count=1
+LONGBRIDGE_SMOKE=1 make smoke-longbridge
 ```
 
 SDK 从 `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN` 读取传统凭据，也支持 SDK OAuth 配置。首期部署先使用最小行情权限的 secret 注入，凭据不得写入仓库、fixture、任务错误或普通日志。

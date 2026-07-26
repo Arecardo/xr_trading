@@ -74,7 +74,7 @@ flowchart LR
 | DB-006 本地 PostgreSQL | DONE | Colima/Docker Compose 冷启动、迁移、重启保留数据已验证 |
 | DB-007 连接池与真实 readyz | DONE | pgxpool 配置解析、启动 Ping、真实 `/readyz=200/503` 与故障语义集成测试通过 |
 | QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；覆盖率持续保持不低于 80% |
-| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环、ADP-001～004、ING-001～006、SCH-001～004、ADM-001～005、UI-001～005 和 OPS-001～005 已完成：查询/采集/管理闭环、JSON 日志、Prometheus 指标与告警、容器冷启动以及隔离备份恢复演练均已落地；下一阶段进入 QA-002～006 与 M5 发布验收 |
+| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环、ADP-001～004、ING-001～006、SCH-001～004、ADM-001～005、UI-001～005、OPS-001～005 和 QA-002～004 已完成；QA-005 GitHub Actions 已实现并等待首次远端 run，随后进入 QA-006 与 M5 发布验收 |
 
 ## 7. 首期明确不做
 

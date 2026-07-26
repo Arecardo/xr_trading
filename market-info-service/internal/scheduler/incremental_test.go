@@ -11,6 +11,7 @@ import (
 
 	"xr-trading/market-info-service/internal/domain"
 	"xr-trading/market-info-service/internal/markettime"
+	"xr-trading/market-info-service/internal/testkit"
 )
 
 func TestIncrementalSchedulerCreatesStableCloseAndRevisionBatches(t *testing.T) {
@@ -20,7 +21,18 @@ func TestIncrementalSchedulerCreatesStableCloseAndRevisionBatches(t *testing.T) 
 	target.Subscription.RevisionDelaySeconds = &revisionSeconds
 	store := &incrementalStoreStub{targets: []SchedulingTarget{target}, batches: make(map[string]ScheduledBatch)}
 	calendar := testNYSECalendar(t)
-	scheduler, err := NewIncrementalScheduler(IncrementalConfig{PageSize: 1, MaximumAttempts: 3}, store, fixedClock{now: now}, domain.NewID, calendar)
+	clock := testkit.NewManualClock(now)
+	ids := testkit.NewIDSequence(
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891602")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891603")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891604")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891605")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891606")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891607")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891608")),
+		domain.IDFromUUID(uuid.MustParse("019f1452-90f7-7992-a87a-ca2727891609")),
+	)
+	scheduler, err := NewIncrementalScheduler(IncrementalConfig{PageSize: 1, MaximumAttempts: 3}, store, clock, ids.Next, calendar)
 	if err != nil {
 		t.Fatalf("NewIncrementalScheduler() error = %v", err)
 	}
@@ -48,10 +60,17 @@ func TestIncrementalSchedulerCreatesStableCloseAndRevisionBatches(t *testing.T) 
 	}
 	assertBatchRange(t, closeBatch, "incremental", "2026-07-17T12:00:00Z", "2026-07-18T12:00:00Z", "2026-07-18T12:02:00Z")
 	assertBatchRange(t, revisionBatch, "revision", "2026-07-18T10:00:00Z", "2026-07-18T11:00:00Z", "2026-07-18T12:00:00Z")
+	if closeBatch.Run.ID.String() != "019f1452-90f7-7992-a87a-ca2727891602" || closeBatch.Task.ID.String() != "019f1452-90f7-7992-a87a-ca2727891603" ||
+		revisionBatch.Run.ID.String() != "019f1452-90f7-7992-a87a-ca2727891604" || revisionBatch.Task.ID.String() != "019f1452-90f7-7992-a87a-ca2727891605" {
+		t.Fatalf("deterministic batch identities close=(%s,%s) revision=(%s,%s)", closeBatch.Run.ID, closeBatch.Task.ID, revisionBatch.Run.ID, revisionBatch.Task.ID)
+	}
 
 	second, err := scheduler.RunOnce(context.Background())
 	if err != nil || second != (IncrementalResult{ScannedSubscriptions: 1, DueWindows: 2, ExistingRuns: 2}) || len(store.batches) != 2 {
 		t.Fatalf("RunOnce(second) = (%#v, %v), batches=%d", second, err, len(store.batches))
+	}
+	if ids.Calls() != 8 || ids.Remaining() != 0 || clock.Now() != now {
+		t.Fatalf("deterministic dependencies calls=%d remaining=%d now=%v", ids.Calls(), ids.Remaining(), clock.Now())
 	}
 }
 

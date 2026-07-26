@@ -1,0 +1,127 @@
+name: Market Information CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-info-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: market-info-service
+
+jobs:
+  static:
+    name: Format, tidy and vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-info-service/go.mod
+          cache-dependency-path: market-info-service/go.sum
+      - name: Run static checks
+        run: make fmt-check tidy-check vet
+
+  unit:
+    name: Unit tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-info-service/go.mod
+          cache-dependency-path: market-info-service/go.sum
+      - name: Enforce coverage threshold
+        run: make coverage
+      - name: Write coverage summary
+        if: always()
+        run: |
+          if [[ -f coverage.out ]]; then
+            {
+              echo '### Market Information Service coverage'
+              echo
+              echo '```text'
+              go tool cover -func=coverage.out | tail -n 1
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-info-coverage
+          path: market-info-service/coverage.out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-info-service/go.mod
+          cache-dependency-path: market-info-service/go.sum
+      - name: Run race detector
+        run: make test-race
+
+  integration:
+    name: Isolated PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-info-service/go.mod
+          cache-dependency-path: market-info-service/go.sum
+      - name: Show Docker versions
+        run: |
+          docker version
+          docker compose version
+      - name: Run isolated integration suite
+        run: make test-integration
+
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-info-service/go.mod
+          cache-dependency-path: market-info-service/go.sum
+      - name: Build service and migration binaries
+        run: make build
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-info-linux-amd64
+          path: market-info-service/bin/
+          if-no-files-found: error
+          retention-days: 14

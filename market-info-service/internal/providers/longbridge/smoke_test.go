@@ -1,3 +1,5 @@
+//go:build smoke
+
 package longbridge
 
 import (
@@ -10,8 +12,9 @@ import (
 	"xr-trading/market-info-service/internal/ingestion/ports"
 )
 
-// TestSmokeMarketData is intentionally opt-in and requires Longbridge quote
-// credentials in the official SDK's LONGBRIDGE_* environment variables.
+// TestSmokeMarketData is intentionally opt-in. Run with LONGBRIDGE_SMOKE=1
+// make smoke-longbridge and quote-only credentials in the SDK's LONGBRIDGE_*
+// environment variables.
 func TestSmokeMarketData(t *testing.T) {
 	if os.Getenv("LONGBRIDGE_SMOKE") != "1" {
 		t.Skip("set LONGBRIDGE_SMOKE=1 with quote credentials to call Longbridge")

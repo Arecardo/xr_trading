@@ -126,6 +126,9 @@ market-info-service/
 - 单元测试与实现放在同一 package 或 `_test` package，优先使用表驱动测试和 `t.Run`。
 - 测试必须可重复、可并行且不依赖执行顺序；适合并行的测试调用 `t.Parallel()`。
 - 单元测试不得访问真实网络、真实 Provider 或开发者数据库；使用接口 fake、`httptest`、固定时钟和 `testdata`。
+- 并发、Scheduler、租约和重试测试优先复用 `internal/testkit` 的 `ManualClock`、`IDSequence`、`Gate` 与 `FaultPlan`；禁止用 `time.Sleep` 充当 goroutine 排序或业务时钟推进。
+- 固定 UUID 必须显式列出并保持领域要求的 UUIDv7；序列耗尽应立即失败，不能自动生成随机 ID 掩盖额外调用。
+- 事务故障注入使用具名 checkpoint，并断言命中次数、回滚和未写入事实，避免仅断言“返回了某个错误”。
 - 测试断言应验证可观察行为，不绑定无关实现细节。
 - 修复缺陷时必须先增加能够复现该缺陷的回归测试。
 
@@ -175,4 +178,3 @@ go tool cover -func=coverage.out
 - API、migration 或配置发生变化时，同步更新对应设计文档和示例。
 - 不包含凭证、临时数据库、覆盖率输出、构建产物或编辑器文件。
 - 新依赖有明确用途，不引入重复能力或不必要的框架。
-
