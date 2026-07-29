@@ -212,7 +212,7 @@ PostgreSQL
 
 Bybit Spot 的实现约束已随 ADP-003 补充到 [Provider 适配器](./04_provider_adapter.md#811-bybit-spot-adapter-第一阶段实现)；Longbridge 美股/ETF 的 SDK 隔离、symbol、常规时段、分页、错误码和凭据约束已随 ADP-004 补充到 [Provider 适配器](./04_provider_adapter.md#812-longbridge-美股etf-adapter-第一阶段实现)。SCH-002 已让 Longbridge、Scheduler 与 freshness 复用同一美股交易日历，统一 DST、完整休市和提前收市的 K 线关闭时间。
 
-ING-001～006 已完成 Worker、Provider 分页、质量校验、重试、租约/取消、Run 汇总和单范围 backfill；SCH-001～004 已完成连续市场/美股日历、跨实例幂等调度和事实缺口续采；ADM-001～005 与 UI-001～005 已完成订阅、任务、操作、Provider 状态和公共行情查询闭环；OPS-001～005 已完成 JSON 日志、低基数 Prometheus 指标、休市安全告警、非 root 容器冷启动/重启/优雅关闭，以及 custom archive 备份恢复和最小角色授权；QA-002～004 已落地隔离 PostgreSQL/Adapter 测试、真实 smoke 双重门禁及确定性并发、时钟、UUID 和故障注入工具，QA-005 GitHub Actions 已实现并等待首次远端 run。具体边界见 [采集流程](./05_ingestion_flow.md#76-执行线流程)、[任务生命周期](./06_task_lifecycle.md#82-租约概念)、[API 设计](./07_api_and_admin_ui.md#3-provider-状态-api) 与 [测试发布计划](./implementation_plan/05_quality_and_release.md)。下一阶段进入 QA-006 与 M5 发布验收。
+ING-001～006 已完成 Worker、Provider 分页、质量校验、重试、租约/取消、Run 汇总和单范围 backfill；SCH-001～004 已完成连续市场/美股日历、跨实例幂等调度和事实缺口续采；ADM-001～005 与 UI-001～005 已完成订阅、任务、操作、Provider 状态和公共行情查询闭环；OPS-001～005 已完成 JSON 日志、低基数 Prometheus 指标、休市安全告警、非 root 容器冷启动/重启/优雅关闭，以及 custom archive 备份恢复和最小角色授权；QA-002～004 已落地隔离 PostgreSQL/Adapter 测试、真实 smoke 双重门禁及确定性并发、时钟、UUID 和故障注入工具；QA-005 GitHub Actions 首次远端运行已通过，并增加仓库策略与 Gitleaks 全历史安全前置门禁。具体边界见 [采集流程](./05_ingestion_flow.md#76-执行线流程)、[任务生命周期](./06_task_lifecycle.md#82-租约概念)、[API 设计](./07_api_and_admin_ui.md#3-provider-状态-api)、[测试发布计划](./implementation_plan/05_quality_and_release.md) 与 [安全开发规范](../12_security_development_standards.md)。下一阶段进入 QA-006 与 M5 发布验收。
 
 ### 14.4 调度与补数算法
 

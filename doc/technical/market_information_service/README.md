@@ -19,6 +19,7 @@
 9. [Go 开发规范](./09_go_development_standards.md)
 10. [数据库技术决策](./10_database_technology_decisions.md)
 11. [实施计划](./implementation_plan/README.md)
+12. [仓库级安全开发规范](../12_security_development_standards.md)
 
 ## 当前已确认重点
 

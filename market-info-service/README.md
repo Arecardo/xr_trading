@@ -104,6 +104,7 @@ Bybit 首期只访问公共 Spot 行情，不读取 API Key；可用 `BYBIT_BASE
 
 GitHub Actions 在 Pull Request、`master` push 和人工触发时运行以下独立门禁：
 
+- `make security-check`，扫描仓库策略和完整 Git 历史；它是其余 job 的前置依赖
 - `make fmt-check tidy-check vet`
 - `make coverage`，全量 statement coverage 不低于 80%
 - `make test-race`
@@ -111,3 +112,5 @@ GitHub Actions 在 Pull Request、`master` push 和人工触发时运行以下�
 - `make build`，构建服务和 migration 两个 Linux 二进制
 
 覆盖率 profile 和构建产物保留 14 天。普通 CI 不读取 Provider 凭据、不执行真实 smoke，也不部署任何环境。开发者提交前可用 `make check` 执行不依赖 Docker 的同等本地门禁；`make fmt` 仅用于主动格式化代码。
+
+本地 `make security-check` 需要先安装 Gitleaks，例如 macOS 使用 `brew install gitleaks`。详细禁止项、网络配置规则、误报审批和泄漏响应见 [安全开发规范](../doc/technical/12_security_development_standards.md)。

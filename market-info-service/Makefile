@@ -1,14 +1,17 @@
-.PHONY: fmt fmt-check tidy-check vet test test-race test-adapters test-integration test-integration-existing smoke-bybit smoke-longbridge coverage build check db-start db-stop migrate-up
+.PHONY: security-check fmt fmt-check tidy-check vet test test-race test-adapters test-integration test-integration-existing smoke-bybit smoke-longbridge coverage build check db-start db-stop migrate-up
 
 COVERAGE_MIN ?= 80.0
 COVERAGE_FILE ?= coverage.out
 BIN_DIR ?= bin
-MARKET_INFO_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_runtime
-MARKET_INFO_MIGRATION_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_owner
-MARKET_INFO_TEST_ADMIN_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/xr_trading?sslmode=disable
+MARKET_INFO_DATABASE_URL ?= postgres://postgres:local-only-database-password@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_runtime
+MARKET_INFO_MIGRATION_DATABASE_URL ?= postgres://postgres:local-only-database-password@localhost:5432/xr_trading?sslmode=disable&options=-c%20role%3Dxr_market_data_owner
+MARKET_INFO_TEST_ADMIN_DATABASE_URL ?= postgres://postgres:local-only-database-password@localhost:5432/xr_trading?sslmode=disable
 export MARKET_INFO_DATABASE_URL
 export MARKET_INFO_MIGRATION_DATABASE_URL
 export MARKET_INFO_TEST_ADMIN_DATABASE_URL
+
+security-check:
+	../scripts/security-check.sh
 
 fmt:
 	go fmt ./...
@@ -75,7 +78,7 @@ build:
 	CGO_ENABLED=0 go build -trimpath -o $(BIN_DIR)/market-info ./cmd/market-info
 	CGO_ENABLED=0 go build -trimpath -o $(BIN_DIR)/market-info-migrate ./cmd/market-info-migrate
 
-check: fmt-check tidy-check vet coverage test-race
+check: security-check fmt-check tidy-check vet coverage test-race
 
 db-start:
 	docker compose --env-file .env.example up -d postgres

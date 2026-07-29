@@ -8,8 +8,8 @@
 | QA-002 | DONE | DB-006 | `integration` build tag、隔离 PostgreSQL、迁移/Repository 测试命令 | Colima 停止时默认单测通过；隔离 Compose 空库连续执行两轮 migration 与全部数据库集成测试通过，容器、network 和 volume 均自动清理 |
 | QA-003 | DONE | ADP-001 | Adapter fixture、fake server 和真实 smoke test 约定 | 7 个 JSON fixture 有效性/敏感字段门禁及两套离线 Adapter 测试通过；真实测试需要 `smoke` build tag 与 Provider 专属环境开关双重启用 |
 | QA-004 | DONE | ING-001、SCH-001 | 并发、固定时钟、固定 UUID、故障注入工具 | 共享 testkit 覆盖率 98.8% 且 race 通过；Scheduler 身份/时间、租约/取消 fencing、重试和五阶段事务回滚可确定性重复执行，隔离 PostgreSQL 套件通过 |
-| QA-005 | IN PROGRESS | QA-002 | GitHub Actions CI 流水线 | 工作流与本地入口已实现；待首次 GitHub run 验证格式、vet、tidy 漂移、coverage、race、隔离 PG 集成测试和双二进制构建后转为 DONE |
-| QA-006 | TODO | OPS-004 | Docker 镜像构建与依赖/secret/migration 历史检查 | 主分支构建镜像；不包含凭证、覆盖率文件或本地数据 |
+| QA-005 | DONE | QA-002 | GitHub Actions CI 流水线 | 首次 push run 的格式、vet、tidy 漂移、88.3% coverage、race、隔离 PG 集成测试和双二进制构建全部通过；后续增加仓库策略与 Gitleaks 全历史安全前置门禁 |
+| QA-006 | TODO | OPS-004、QA-005 | Docker 镜像构建、依赖漏洞、镜像内容和 migration 历史检查 | 主分支构建镜像；镜像不包含凭证、覆盖率文件或本地数据；仓库 secret 扫描已由 QA-005 前置完成 |
 
 ## 2. 覆盖率执行规则
 
@@ -70,6 +70,9 @@
 - 普通 CI 不配置 Longbridge/Bybit 凭据、不执行真实 Provider smoke、不执行生产部署。部署和镜像供应链门禁属于 QA-006 及后续发布流程。
 - 后续如需要统一入口，只增加只读“工程运维概览”：展示最新 CI 结果、覆盖率、commit/image/migration/config 版本、环境健康和原平台链接；首期不保存平台凭据，也不提供部署按钮。
 - 测试环境绑定使用不可变关系 `environment → commit SHA → image digest → migration version → config version`，由 CI/部署阶段写入；不得在页面中任意绑定一个可变 URL 来代替发布身份。
+- `Security preflight` 是其余五个 job 的强制 `needs` 依赖；它执行仓库策略扫描器单测、敏感文件/IP/端口规则和 Gitleaks 完整历史扫描。安全门禁失败时不启动编译、测试或 artifact 上传。
+- Gitleaks 版本与 Linux x64 release SHA-256 固定在工作流中；checkout 使用完整历史且不持久化凭据，扫描日志启用 100% redact，不上传 finding 报告。
+- 安全规则的仓库级定义和泄漏响应见 [安全开发规范](../../12_security_development_standards.md)。
 
 ## 4. M5 发布验收清单
 

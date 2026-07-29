@@ -15,6 +15,7 @@
 - [日志、审计与报告技术文档](./09_logging_reports.md)
 - [市场资讯服务文档集](./market_information_service/README.md)
 - [历史股票池应用迁移说明](./stock_pool_app/README.md)
+- [安全开发规范](./12_security_development_standards.md)
 
 ## 建议落地顺序
 
