@@ -22,6 +22,16 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"MARKET_INFO_DB_HEALTH_CHECK_PERIOD",
 		"MARKET_INFO_ADMIN_BEARER_TOKEN",
 		"MARKET_INFO_ADMIN_SUBJECT",
+		"MARKET_INFO_ENABLED_PROVIDERS",
+		"BYBIT_BASE_URL",
+		"MARKET_INFO_WORKER_ID",
+		"MARKET_INFO_WORKER_CONCURRENCY",
+		"MARKET_INFO_WORKER_LEASE_DURATION",
+		"MARKET_INFO_WORKER_POLL_INTERVAL",
+		"MARKET_INFO_WORKER_CLAIM_ERROR_BACKOFF",
+		"MARKET_INFO_INGESTION_BARS_PER_PAGE",
+		"MARKET_INFO_INGESTION_MAXIMUM_PAGES",
+		"MARKET_INFO_SCHEDULER_INTERVAL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -38,6 +48,70 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 	}
 	if _, ok := os.LookupEnv("MARKET_INFO_HTTP_ADDRESS"); !ok {
 		t.Fatal("test environment was not set")
+	}
+}
+
+func TestLoadFromForWorkerDoesNotRequireAdminCredential(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"MARKET_INFO_DATABASE_URL":               "postgres://user:pass@localhost:5432/db",
+		"MARKET_INFO_ENABLED_PROVIDERS":          "longbridge,bybit",
+		"MARKET_INFO_WORKER_ID":                  "worker-a",
+		"MARKET_INFO_WORKER_CONCURRENCY":         "6",
+		"MARKET_INFO_WORKER_LEASE_DURATION":      "20m",
+		"MARKET_INFO_WORKER_POLL_INTERVAL":       "2s",
+		"MARKET_INFO_WORKER_CLAIM_ERROR_BACKOFF": "7s",
+		"MARKET_INFO_INGESTION_BARS_PER_PAGE":    "750",
+		"MARKET_INFO_INGESTION_MAXIMUM_PAGES":    "30",
+		"MARKET_INFO_SCHEDULER_INTERVAL":         "2m",
+		"BYBIT_BASE_URL":                         "https://example.com",
+	}
+	cfg, err := LoadFromForMode(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	}, RuntimeModeWorker)
+	if err != nil {
+		t.Fatalf("LoadFromForMode() error = %v", err)
+	}
+	if cfg.AdminBearerToken != "" || strings.Join(cfg.EnabledProviders, ",") != "bybit,longbridge" ||
+		cfg.WorkerConcurrency != 6 || cfg.WorkerLeaseDuration != 20*time.Minute ||
+		cfg.IngestionBarsPerPage != 750 || cfg.SchedulerInterval != 2*time.Minute {
+		t.Fatalf("unexpected worker config: %+v", cfg)
+	}
+}
+
+func TestLoadFromForModeRejectsWorkerConfiguration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		values    map[string]string
+		wantError string
+	}{
+		{name: "missing providers", wantError: "MARKET_INFO_ENABLED_PROVIDERS is required"},
+		{name: "unknown provider", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "coinbase"}, wantError: "accepts only"},
+		{name: "duplicate provider", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit,bybit"}, wantError: "duplicates"},
+		{name: "padded provider", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit, longbridge"}, wantError: "accepts only"},
+		{name: "bad worker ID", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit", "MARKET_INFO_WORKER_ID": " bad"}, wantError: "WORKER_ID"},
+		{name: "bad concurrency", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit", "MARKET_INFO_WORKER_CONCURRENCY": "0"}, wantError: "WORKER_CONCURRENCY"},
+		{name: "bad page size", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit", "MARKET_INFO_INGESTION_BARS_PER_PAGE": "1001"}, wantError: "BARS_PER_PAGE"},
+		{name: "bad max pages", values: map[string]string{"MARKET_INFO_ENABLED_PROVIDERS": "bybit", "MARKET_INFO_INGESTION_MAXIMUM_PAGES": "101"}, wantError: "MAXIMUM_PAGES"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]string{"MARKET_INFO_DATABASE_URL": "postgres://user:pass@localhost:5432/db"}
+			for key, value := range test.values {
+				values[key] = value
+			}
+			_, err := LoadFromForMode(func(key string) (string, bool) {
+				value, ok := values[key]
+				return value, ok
+			}, RuntimeModeWorker)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("LoadFromForMode() error = %v, want containing %q", err, test.wantError)
+			}
+		})
 	}
 }
 

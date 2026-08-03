@@ -28,3 +28,6 @@ coverage.out
 market-info-service/bin/
 .run/
 market-info-service/backups/
+
+# OS files
+.DS_Store

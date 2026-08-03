@@ -4,7 +4,7 @@
 
 | ID | 状态 | 依赖 | 输出 | 完成条件 |
 | --- | --- | --- | --- | --- |
-| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | QA-004 后全量 statement coverage 88.3%，testkit 98.8%、observability 94.1%、application 89.1%、HTTP API 86.2%、ingestion 89.1%、scheduler 88.5%、repository 84.9%，race 通过 |
+| QA-001 | DONE | ENG-002 | `make fmt/vet/coverage/test-race/check` 基线 | ENG-004 后全量 statement coverage 88.1%，servicehost 97.9%、testkit 98.8%、observability 94.1%、application 89.1%、HTTP API 86.2%、ingestion 89.1%、scheduler 88.5%、repository 84.9%，race 通过 |
 | QA-002 | DONE | DB-006 | `integration` build tag、隔离 PostgreSQL、迁移/Repository 测试命令 | Colima 停止时默认单测通过；隔离 Compose 空库连续执行两轮 migration 与全部数据库集成测试通过，容器、network 和 volume 均自动清理 |
 | QA-003 | DONE | ADP-001 | Adapter fixture、fake server 和真实 smoke test 约定 | 7 个 JSON fixture 有效性/敏感字段门禁及两套离线 Adapter 测试通过；真实测试需要 `smoke` build tag 与 Provider 专属环境开关双重启用 |
 | QA-004 | DONE | ING-001、SCH-001 | 并发、固定时钟、固定 UUID、故障注入工具 | 共享 testkit 覆盖率 98.8% 且 race 通过；Scheduler 身份/时间、租约/取消 fencing、重试和五阶段事务回滚可确定性重复执行，隔离 PostgreSQL 套件通过 |

@@ -15,6 +15,7 @@ import (
 	"xr-trading/market-info-service/internal/api/httpapi"
 	"xr-trading/market-info-service/internal/config"
 	"xr-trading/market-info-service/internal/database/postgres"
+	"xr-trading/market-info-service/internal/markettime"
 	"xr-trading/market-info-service/internal/server"
 )
 
@@ -150,6 +151,44 @@ func TestRunDefaultsToServeMode(t *testing.T) {
 	}
 }
 
+func TestRunWorkerAndAllModes(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []config.RuntimeMode{config.RuntimeModeWorker, config.RuntimeModeAll} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			db := &stubPool{claimCalled: make(chan struct{}, 1)}
+			serverCalls := 0
+			result := make(chan error, 1)
+			go func() {
+				result <- run(ctx, []string{string(mode)}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
+					return db, nil
+				}, func(cfg server.Config, handler http.Handler) (*server.Server, error) {
+					serverCalls++
+					return server.New(cfg, handler)
+				})
+			}()
+			select {
+			case <-db.claimCalled:
+			case <-time.After(time.Second):
+				t.Fatal("worker did not attempt to claim a task")
+			}
+			cancel()
+			if err := <-result; err != nil {
+				t.Fatalf("run(%s) error = %v", mode, err)
+			}
+			wantServerCalls := 0
+			if mode == config.RuntimeModeAll {
+				wantServerCalls = 1
+			}
+			if serverCalls != wantServerCalls || !db.closed {
+				t.Fatalf("server calls=%d want=%d closed=%v", serverCalls, wantServerCalls, db.closed)
+			}
+		})
+	}
+}
+
 func TestRunRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
@@ -161,9 +200,10 @@ func TestRunRejectsInvalidInput(t *testing.T) {
 		create    newServer
 		wantError string
 	}{
-		{"missing dependency", nil, nil, nil, nil, "serve dependencies are required"},
-		{"unsupported mode", []string{"worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "unsupported mode"},
-		{"config error", nil, func() (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "load configuration"},
+		{"missing dependency", nil, nil, nil, nil, "configuration loader and database opener"},
+		{"unsupported mode", []string{"other"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "unsupported mode"},
+		{"too many modes", []string{"serve", "worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "at most one"},
+		{"config error", nil, func(config.RuntimeMode) (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "load configuration"},
 		{"open error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return nil, errors.New("db down") }, server.New, "open database pool"},
 		{"server error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, func(server.Config, http.Handler) (*server.Server, error) { return nil, errors.New("bad server") }, "create HTTP server"},
 	}
@@ -178,29 +218,78 @@ func TestRunRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
+	if err := run(nil, nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
+		return &stubPool{}, nil
+	}, server.New); err == nil || !strings.Contains(err.Error(), "runtime context") {
+		t.Fatalf("run(nil context) error = %v", err)
+	}
 }
 
-func validRuntimeConfig() (config.Config, error) {
+func TestBuildAdapterRegistry(t *testing.T) {
+	t.Parallel()
+
+	calendar, err := markettime.NewNYSECalendar()
+	if err != nil {
+		t.Fatalf("NewNYSECalendar() error = %v", err)
+	}
+	registry, closeAdapters, err := buildAdapterRegistry(context.Background(), config.Config{
+		EnabledProviders: []string{"bybit"},
+	}, calendar)
+	if err != nil {
+		t.Fatalf("buildAdapterRegistry() error = %v", err)
+	}
+	adapters := registry.List()
+	if len(adapters) != 1 || adapters[0].ProviderCode().String() != "bybit" {
+		t.Fatalf("registered adapters = %#v", adapters)
+	}
+	if err := closeAdapters(); err != nil {
+		t.Fatalf("close adapters error = %v", err)
+	}
+
+	if _, _, err := buildAdapterRegistry(context.Background(), config.Config{
+		EnabledProviders: []string{"bybit"},
+		BybitBaseURL:     "not-a-url",
+	}, calendar); err == nil || !strings.Contains(err.Error(), "create Bybit adapter") {
+		t.Fatalf("buildAdapterRegistry(invalid URL) error = %v", err)
+	}
+	if _, _, err := buildAdapterRegistry(context.Background(), config.Config{
+		EnabledProviders: []string{"unsupported"},
+	}, calendar); err == nil || !strings.Contains(err.Error(), "unsupported configured provider") {
+		t.Fatalf("buildAdapterRegistry(unsupported) error = %v", err)
+	}
+}
+
+func validRuntimeConfig(config.RuntimeMode) (config.Config, error) {
 	return config.Config{
-		HTTPAddress:      "127.0.0.1:0",
-		ReadTimeout:      time.Millisecond,
-		WriteTimeout:     time.Millisecond,
-		IdleTimeout:      time.Millisecond,
-		ShutdownTimeout:  time.Millisecond,
-		ReadinessTimeout: time.Millisecond,
-		DatabaseURL:      "postgres://user:pass@localhost:5432/db",
-		DBMaxConns:       8,
-		DBMinConns:       1,
-		DBMaxConnLife:    time.Minute,
-		DBHealthPeriod:   time.Second,
-		AdminBearerToken: "test-admin-token",
-		AdminSubject:     "test-admin",
+		HTTPAddress:             "127.0.0.1:0",
+		ReadTimeout:             time.Millisecond,
+		WriteTimeout:            time.Millisecond,
+		IdleTimeout:             time.Millisecond,
+		ShutdownTimeout:         time.Millisecond,
+		ReadinessTimeout:        time.Millisecond,
+		DatabaseURL:             "postgres://user:pass@localhost:5432/db",
+		DBMaxConns:              8,
+		DBMinConns:              1,
+		DBMaxConnLife:           time.Minute,
+		DBHealthPeriod:          time.Second,
+		AdminBearerToken:        "test-admin-token",
+		AdminSubject:            "test-admin",
+		EnabledProviders:        []string{"bybit"},
+		WorkerID:                "test-worker",
+		WorkerConcurrency:       1,
+		WorkerLeaseDuration:     time.Minute,
+		WorkerPollInterval:      time.Millisecond,
+		WorkerClaimErrorBackoff: time.Millisecond,
+		IngestionBarsPerPage:    100,
+		IngestionMaximumPages:   2,
+		SchedulerInterval:       time.Millisecond,
 	}, nil
 }
 
 type stubPool struct {
-	version int64
-	closed  bool
+	version     int64
+	closed      bool
+	claimCalled chan struct{}
 }
 
 func (s *stubPool) Ping(context.Context) error {
@@ -213,6 +302,15 @@ func (s *stubPool) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
 	}
 	if strings.Contains(query, "count(*) FILTER (WHERE status = 'pending')") {
 		return stubMetricsRow{}
+	}
+	if strings.Contains(query, "WITH candidate AS") {
+		if s.claimCalled != nil {
+			select {
+			case s.claimCalled <- struct{}{}:
+			default:
+			}
+		}
+		return stubErrorRow{err: pgx.ErrNoRows}
 	}
 	return stubRow{version: s.version}
 }

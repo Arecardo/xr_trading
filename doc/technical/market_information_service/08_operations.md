@@ -37,6 +37,20 @@ Docker Compose
 
 第一阶段可使用 PostgreSQL 任务表、唯一约束、事务和租约实现任务幂等与多实例协调。后续出现明确问题后再替换，不提前扩张基础设施。
 
+### 11.2 进程模式与生命周期
+
+`market-info` 二进制提供三种互斥运行模式：
+
+| 模式 | HTTP/API | Scheduler | Worker/Adapter | 使用场景 |
+| --- | --- | --- | --- | --- |
+| `serve` | 是 | 否 | 否 | 独立查询与管理 API；不需要 Provider 凭据 |
+| `worker` | 否 | 是 | 是 | 独立后台采集进程；不需要管理 API Bearer 凭据 |
+| `all` | 是 | 是 | 是 | 首期单实例或本地一体化运行 |
+
+`worker/all` 必须通过 `MARKET_INFO_ENABLED_PROVIDERS` 显式选择 `bybit`、`longbridge` 或两者。Bybit Adapter 使用公开 Spot API；Longbridge 只有被选择时才从官方 SDK 环境配置读取外部 secret、建立 QuoteContext，并在进程退出时关闭。Scheduler 与 Worker 共享数据库连接池，但只有 Worker 的 IngestionService 持有并复用不可变 Adapter Registry；Scheduler 只计算窗口并创建持久 Run/Task。
+
+Scheduler 启动后立即执行一次，随后按 `MARKET_INFO_SCHEDULER_INTERVAL` 周期扫描。单轮失败记录固定、脱敏的错误码并在下一周期重试，不会停止仍在消费已落库任务的 Worker。任一长运行组件意外结束或返回错误时，统一组件宿主取消其他组件并等待清理；SIGINT/SIGTERM 取消是正常退出。Worker 实例身份可由 `MARKET_INFO_WORKER_ID` 显式指定，未设置时生成 `market-info-worker-<UUID>`，避免多实例共享租约持有者标识。
+
 ## 12. 安全与凭据
 
 - Bybit 第一阶段只调用公开 Spot 市场接口，不配置 API Key；Longbridge 使用官方 SDK，从 secret 注入 `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN` 或 OAuth 配置，且只授予行情权限。
@@ -47,7 +61,7 @@ Docker Compose
 - 密钥通过环境变量或外部 secret 文件注入，不写入数据库或日志；版本库中的 `.env.example` 只能包含明确的本地占位值，部署时必须替换。
 - 原始供应商响应和错误日志必须过滤 token、签名和账户敏感字段。
 
-ADM-001 首期管理 API 使用可替换 `Authenticator` 的静态 Bearer 实现。进程启动必须提供 `MARKET_INFO_ADMIN_BEARER_TOKEN`，可用 `MARKET_INFO_ADMIN_SUBJECT` 设置审计主体（默认 `market-info-admin`）；静态实现构造后只保留 token 的 SHA-256 摘要。该首期凭据拥有 `operations.read`、`subscriptions.manage` 和 `ingestion.manage`，适用于小规模部署，后续可替换为网关/JWT/OIDC 而不改变 Handler 与 Application 契约。公共行情、`/healthz` 和 `/readyz` 仍不鉴权。
+ADM-001 首期管理 API 使用可替换 `Authenticator` 的静态 Bearer 实现。`serve/all` 模式启动必须提供 `MARKET_INFO_ADMIN_BEARER_TOKEN`，可用 `MARKET_INFO_ADMIN_SUBJECT` 设置审计主体（默认 `market-info-admin`）；纯 `worker` 模式不读取该管理凭据。静态实现构造后只保留 token 的 SHA-256 摘要。该首期凭据拥有 `operations.read`、`subscriptions.manage` 和 `ingestion.manage`，适用于小规模部署，后续可替换为网关/JWT/OIDC 而不改变 Handler 与 Application 契约。公共行情、`/healthz` 和 `/readyz` 仍不鉴权。
 
 具体凭据轮换、加密存储和生产环境 secret 管理方案留待部署设计阶段确定。
 

@@ -2,7 +2,7 @@
 
 > 计划依据：本目录上级的领域、数据库、Adapter、采集流程、任务生命周期、API、运维与 Go 开发规范。  
 > 当前状态：实施中。  
-> 最近更新：2026-07-23
+> 最近更新：2026-07-29
 
 ## 1. 使用方式
 
@@ -70,11 +70,12 @@ flowchart LR
 | ENG-001 Go 开发规范 | DONE | 已建立单元测试与覆盖率要求 |
 | ENG-002 Go module 与目录骨架 | DONE | 已创建独立 module |
 | ENG-003 配置、HTTP 生命周期、health handler | DONE | 使用可注入 readiness checker；真实数据库装配纳入 DB-007 |
+| ENG-004 运行模式与依赖装配 | DONE | `serve/worker/all`、Adapter Registry、Scheduler 周期驱动、Worker 和协作式退出已完成 |
 | DB-004 Migration 基础设施 | DONE | 嵌入式 goose migration、迁移 CLI、重复执行和版本兼容 checker 已通过 |
 | DB-006 本地 PostgreSQL | DONE | Colima/Docker Compose 冷启动、迁移、重启保留数据已验证 |
 | DB-007 连接池与真实 readyz | DONE | pgxpool 配置解析、启动 Ping、真实 `/readyz=200/503` 与故障语义集成测试通过 |
 | QA-001 基础质量门禁 | DONE | `gofmt`、`vet`、coverage、race；覆盖率持续保持不低于 80% |
-| PLAN-001 可执行实施计划 | DONE | M2 公共查询闭环、ADP-001～004、ING-001～006、SCH-001～004、ADM-001～005、UI-001～005、OPS-001～005 和 QA-002～005 已完成；CI 已具备安全前置、静态、coverage、race、隔离 PG 和构建门禁，随后进入 QA-006 与 M5 发布验收 |
+| PLAN-001 可执行实施计划 | DONE | M2～M4 功能切片及 ENG-004 运行装配已完成；CI 已具备安全前置、静态、coverage、race、隔离 PG 和构建门禁，剩余 ENG-006、DB-005/008、QA-006 与 M5 发布验收 |
 
 ## 7. 首期明确不做
 

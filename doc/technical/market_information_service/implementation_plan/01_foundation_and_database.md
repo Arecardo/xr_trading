@@ -16,7 +16,7 @@ DB-001～003 完成前不得冻结初始 migration。
 | --- | --- | --- | --- | --- |
 | ENG-001 | DONE | 无 | Go 开发规范 | 文档已索引 |
 | ENG-002 | DONE | ENG-001 | `go.mod`、配置包、HTTP Server、health handler | 单测、race、coverage 通过 |
-| ENG-004 | READY | DB-001 | `cmd/market-info`、`serve/worker/all` 模式解析、信号与依赖装配 | 启动参数、取消、错误退出单测；二进制可构建 |
+| ENG-004 | DONE | DB-001 | 已实现 `cmd/market-info` 的 `serve/worker/all` 模式、模式最小配置、统一组件宿主、Adapter/Worker/Scheduler 装配与资源关闭 | 模式解析、条件依赖、Scheduler 周期容错、组件错误传播、协作取消和 Adapter Registry 单测通过；二进制可构建 |
 | ENG-005 | DONE | ENG-002 | 已实现结构化日志、Request ID、panic recovery、统一错误 envelope | middleware 顺序、ID 传播、脱敏、错误映射单测通过；运行期日志不输出原始错误或 panic value |
 | ENG-006 | TODO | ENG-004、DB-004 | 示例配置和启动 README | 缺必填配置快速失败；示例不含有效凭证 |
 
@@ -44,6 +44,15 @@ DB-001～003 完成前不得冻结初始 migration。
 | DB-014 | DONE | DB-005、DB-009 | 已实现开放质量问题幂等创建，以及 acknowledged/resolved/ignored 状态流转 | 全 NULL、部分 NULL、全量维度、并发去重、解决后重开及状态流转集成测试通过 |
 
 DB-010、DB-011、DB-012、DB-014 可在契约冻结后并行；DB-013 由单一负责人实现，因为它集中承载任务并发和事务语义。
+
+ENG-004 冻结以下运行语义：
+
+- `serve` 只启动 HTTP/API、健康检查和指标，不创建 Adapter，也不读取 Longbridge 行情凭据。
+- `worker` 不监听 HTTP，同时启动增量 Scheduler 周期驱动和任务消费 Worker；Scheduler 只创建持久化 Run/Task，Provider 调用只发生在 Worker。
+- `all` 在同一进程内启动 HTTP、Scheduler 和 Worker，适合首期单实例部署；三者共享数据库连接池，Worker 的 IngestionService 复用同一个不可变 Adapter Registry。
+- `MARKET_INFO_ENABLED_PROVIDERS` 在 `worker/all` 模式必填且首期只允许 `bybit,longbridge`。Bybit 使用公开 Spot API；只有显式启用 Longbridge 时才由官方 SDK 读取外部 secret 并创建长连接，退出时统一关闭。
+- Scheduler 启动后立即执行一轮，之后按 `MARKET_INFO_SCHEDULER_INTERVAL` 周期执行。单轮数据库错误会记录固定错误码并等待下一周期，不停止仍可消费持久任务的 Worker。
+- 任一长运行组件意外退出或返回错误时，组件宿主取消其余组件并等待全部退出；进程信号取消属于正常退出。`MARKET_INFO_WORKER_ID` 未设置时生成带 UUID 的实例身份，避免多实例共用锁持有者标识。
 
 ## 5. M1 退出门禁
 
