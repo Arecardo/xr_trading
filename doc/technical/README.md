@@ -16,6 +16,9 @@
 - [市场资讯服务文档集](./market_information_service/README.md)
 - [历史股票池应用迁移说明](./stock_pool_app/README.md)
 - [安全开发规范](./12_security_development_standards.md)
+- [开发路线图与可执行任务链](./roadmap/README.md)
+
+> 工程规范与协作工作流见仓库根 `CLAUDE.md` 与 `.claude/standards/`。
 
 ## 建议落地顺序
 
