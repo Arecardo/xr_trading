@@ -41,10 +41,12 @@ backend/
 
 ## 3. 技术栈与升级路径
 
-- **当前**：Python 标准库 `http.server` + SQLite，可继续用于研究阶段轻量原型。
-- **升级触发条件**（满足任一即应升级）：需并发写入、需与 Go 服务共用 PostgreSQL、需引入策略/风控/执行/回测正式模块、需稳定 API 契约给前端。
-- **升级目标**：Web 框架采用 FastAPI（异步、pydantic 校验、OpenAPI），持久化迁移到 PostgreSQL 以与行情服务对齐；迁移采用版本化 migration（如 Alembic）。
-- 升级前后保持 API 契约兼容，旧接口按需保留只读代理。
+- **已决策（RM0 DEC-005，2026-08-05）：RM1 起点即升级到 FastAPI + PostgreSQL + Alembic**，不再继续在 stdlib `http.server` + SQLite 原型上累加代码。原 `backend/app.py`（stdlib + SQLite）保留作为历史参考，新领域代码一律基于新技术栈按 §2 目录结构展开。
+- 决策依据：RM1 自身退出条件（组合估值/持仓/现金/汇率快照骨架 + 行情服务集成）已构成"正式模块"，命中下方升级触发条件，非预判性提前投入；且 `backend/app.py` 当时无 `requirements.txt`/`pyproject.toml` 等可保留资产，是切换成本最低的时间点。详见 `doc/technical/roadmap/01_decisions.md` DEC-005。
+- **升级触发条件**（历史记录，已全部或部分命中并触发上述决策）：需并发写入、需与 Go 服务共用 PostgreSQL（各自独立实例/角色，不共享表）、需引入策略/风控/执行/回测正式模块、需稳定 API 契约给前端。
+- **技术栈**：Web 框架 FastAPI（异步、pydantic 校验、OpenAPI）；持久化 PostgreSQL，独立数据库实例/角色，不与行情服务共享表（`project-conventions.md` §2）；迁移采用 Alembic 版本化 migration。Postgres 部署复用 `market-info-service/compose.yaml` 已验证的服务模式（独立 `POSTGRES_DB`/角色、健康检查、独立 volume）。
+- 出站调用 `market-info-service` 的批量/精度查询等客户端使用 `httpx.AsyncClient`，封装在 `adapters/market_data/`。
+- 保持 API 契约向后兼容，旧接口按需保留只读代理。
 
 ## 4. 代码风格
 

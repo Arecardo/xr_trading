@@ -6,7 +6,7 @@
 
 ## 2. 资产主数据
 
-`config/assets.yaml` 示例：
+`config/assets.yaml` 首批标的清单（RM0 DEC-001 已决策，2026-08-05，详见需求文档 §4.4）：
 
 ```yaml
 assets:
@@ -19,15 +19,24 @@ assets:
     trading_status: tradable
     provider_symbols:
       longbridge: NVDA.US
-  - asset_id: crypto:coinbase:BTC-USD
+  - asset_id: equity:nasdaq:QQQ
+    asset_type: ETF
+    symbol: QQQ
+    name: Invesco QQQ Trust
+    venue: NASDAQ
+    quote_currency: USD
+    trading_status: tradable
+    provider_symbols:
+      longbridge: QQQ.US
+  - asset_id: crypto:bybit:BTC-USDT
     asset_type: CRYPTO
     symbol: BTC
     name: Bitcoin
-    venue: COINBASE
-    quote_currency: USD
-    trading_status: watch
+    venue: BYBIT
+    quote_currency: USDT
+    trading_status: tradable
     provider_symbols:
-      market_data: BTC-USD
+      bybit: BTCUSDT   # 现货（spot），非合约
   - asset_id: cash:USD
     asset_type: CASH
     symbol: USD
@@ -35,6 +44,8 @@ assets:
     quote_currency: USD
     trading_status: tradable
 ```
+
+`BTC-USDT` 计价货币为 USDT，非组合基础货币 USD；折算方式遵循需求文档 §4.2（记录原币价值、汇率、折算后组合价值），不得硬编码 1:1 锚定假设。
 
 资产唯一性使用 `asset_id`。同名代码、不同交易所或不同报价币必须是不同资产记录。
 
@@ -53,15 +64,20 @@ portfolios:
     allowed_asset_types: [STOCK, ETF, CRYPTO, CASH]
     members:
       - asset_id: equity:nasdaq:NVDA
-        member_status: approved
+        member_status: held
         target_weight_min: 0.00
         target_weight_max: 0.20
         added_reason: AI 基础设施核心资产
-      - asset_id: crypto:coinbase:BTC-USD
-        member_status: candidate
+      - asset_id: equity:nasdaq:QQQ
+        member_status: held
+        target_weight_min: 0.00
+        target_weight_max: 0.30
+        added_reason: 宽基基准，兼作组合低波动锚点
+      - asset_id: crypto:bybit:BTC-USDT
+        member_status: held
         target_weight_min: 0.00
         target_weight_max: 0.15
-        added_reason: 加密资产配置候选
+        added_reason: 加密现货配置，RM0 DEC-001 首批标的
 ```
 
 ### 3.1 组合状态
@@ -101,7 +117,7 @@ portfolios:
 
 ```json
 {
-  "asset_id": "crypto:coinbase:BTC-USD",
+  "asset_id": "crypto:bybit:BTC-USDT",
   "interval": "1d",
   "market_time": "2026-06-28T00:00:00Z",
   "open": 100000.0,
@@ -109,7 +125,7 @@ portfolios:
   "low": 99000.0,
   "close": 102000.0,
   "volume": 12000.5,
-  "quote_currency": "USD",
+  "quote_currency": "USDT",
   "source": "market_data_provider",
   "quality_status": "valid",
   "collected_at": "2026-06-29T08:00:00+08:00"
@@ -161,6 +177,7 @@ MVP 结构化业务数据可使用 SQLite，批量历史行情优先使用 Parqu
 - 股票拆股分红和代码变更必须可追溯。
 - 加密资产必须记录交易场所、交易对、报价币和精度。
 - 数据修订不得覆盖历史而不留版本或审计记录。
+- **精度规则（`price_scale`/`quantity_scale`/`lot_size`/`min_quantity`）唯一来源是 `market-info-service` 的 `Instrument` 目录，不得在 `backend` 侧硬编码或重复维护**（RM0 DEC-003，见需求文档 §5.1.1）。`backend` 通过批量查询端点 + TTL 本地缓存读取，数据缺失或过期时下单前必须 fail-closed。
 
 ## 9. 对外输出
 
@@ -170,7 +187,8 @@ MVP 结构化业务数据可使用 SQLite，批量历史行情优先使用 Parqu
   "portfolio_ids": ["pf_growth_us_crypto"],
   "asset_ids": [
     "equity:nasdaq:NVDA",
-    "crypto:coinbase:BTC-USD"
+    "equity:nasdaq:QQQ",
+    "crypto:bybit:BTC-USDT"
   ],
   "dataset_version": "market_20260629_001",
   "account_snapshot_id": "acct_snap_20260629_001",

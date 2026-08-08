@@ -36,14 +36,16 @@ config/
 ```yaml
 environment:
   default: paper
-  timezone: Asia/Kuala_Lumpur
+  timezone: Asia/Shanghai       # 仅用于报告展示转换，估值计算基准见 valuation_timezone
   markets: [US, CRYPTO]
   valuation_timezone: UTC
-  valuation_cutoff: "00:00"
+  valuation_cutoff: "00:00"     # RM0 DEC-002 已决策（2026-08-05），详见需求文档 §5.5.1
   report_language: zh-CN
   data_root: data
   report_root: reports
 ```
+
+`valuation_cutoff` 按 UTC 自然日推进，全年 365 天生成 `ValuationSnapshot`（不因美股周末/假期跳过）；美股非交易日沿用上一交易日收盘价并标记 `price_status: stale`，加密资产照常取当日新数据。
 
 ## 5. 交易配置示例
 

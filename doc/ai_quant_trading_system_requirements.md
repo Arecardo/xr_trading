@@ -119,6 +119,19 @@ MVP 只允许做多现货资产，不使用保证金和杠杆。
 - 组合最大回撤停止线：8% 至 10%。
 - 最低现金比例：20%。
 
+### 4.4 首批标的清单（RM0 DEC-001 已决策，2026-08-05）
+
+| asset_id | asset_type | venue | quote_currency | provider_symbols | 首批状态 |
+| --- | --- | --- | --- | --- | --- |
+| `equity:nasdaq:NVDA` | STOCK | NASDAQ | USD | longbridge: `NVDA.US` | held |
+| `equity:nasdaq:QQQ` | ETF | NASDAQ | USD | longbridge: `QQQ.US` | held（兼作宽基基准） |
+| `crypto:bybit:BTC-USDT` | CRYPTO | BYBIT | USDT | bybit: `BTCUSDT`（现货） | held |
+
+- 范围仅现货，不含合约、杠杆、保证金交易，与 §4.1、§2.2 非目标一致。
+- `BTC-USDT` 计价货币为 USDT，非基础货币 `USD`；按 §4.2 规则记录原币价值、汇率与折算后组合价值，不假设 1:1 硬编码锚定。
+- 候选标的管理复用现有 `Portfolio`/`PortfolioMember`（详见 `doc/technical/03_universe_data.md`），支持按条件筛选与手工添加，不复用已废弃的 `stock_pools`。
+- 本清单为 RM3 最小纵切的首批范围，后续可通过 `member_status: candidate` 扩展观察池，不需要重新决策。
+
 ## 5. 核心领域模型
 
 ```text
@@ -146,6 +159,13 @@ User
 - `trading_status`：`watch`、`tradable`、`paused`、`blacklist`。
 
 资产唯一性不得只依赖 `symbol`，应使用 `asset_id` 或 `asset_type + venue + symbol`。
+
+#### 5.1.1 碎股与精度规则（RM0 DEC-003 已决策，2026-08-05）
+
+- **碎股**：`research`/`backtest`/`paper` 环境下单数量内部一律使用 `Decimal` 任意精度记录，不做整股取整。理由：首批组合初始资金约 2,500 美元（§4.2），NVDA/QQQ 单股价值本身可能占组合 5%~20%，整股取整会导致目标权重与实际持仓严重偏离，使风控权重上限失去意义。`live` 环境碎股下单需在 RM5 前单独核实长桥 Open API 是否支持程序化提交碎股订单；若不支持，执行层须采用「整股取整 + 剩余现金留存」兜底规则，不得默认碎股在实盘下必然可用。
+- **精度规则来源**：`price_scale`、`quantity_scale`、`lot_size`、`min_quantity` 唯一真相来源是 `market-info-service` 的 `Instrument` 目录（见 `doc/technical/market_information_service/02_domain_model.md` §6.2），由行情服务从 Bybit/长桥采集并维护。`backend` 通过行情服务 API 读取，**不得在 Python 侧硬编码任何具体精度数值**（交易所规则会变，硬编码值会静默过期并引入资金风险）。目录中对应 Instrument 缺失或精度数据过期时，下单前必须 fail-closed（拒绝生成订单），不得使用猜测默认值兜底，与安全规范"缺关键凭据 fail-closed"同一原则。
+- **跨服务交互方式**：沿用现有 HTTP JSON API，不引入 gRPC/protobuf。`backend` 通过一个批量端点一次性查询多个 `instrument_id` 的精度字段（避免逐单查询），并做带 TTL 的本地缓存；缓存过期或接口不可用时按上条 fail-closed。是否引入 gRPC/流式接口留待触发条件出现后再评估，见 `.claude/standards/project-conventions.md` §2。
+- **待办（不阻塞 DEC-003，交给 RM1 前置）**：`market-info-service` 需为 NVDA、QQQ、BTC-USDT 三个 Instrument 采集并写入真实的 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity` 值，这是 RM2 回测撮合与 RM3 paper 下单可运行的前提。
 
 ### 5.2 Portfolio
 
@@ -177,6 +197,12 @@ User
 - `Position` 记录组合、账户、资产维度的数量、成本和市值。
 - `ValuationSnapshot` 记录组合在给定时点的现金、资产市值、净值与汇率。
 - `PerformanceSnapshot` 记录收益、回撤、波动率、基准和贡献度。
+
+#### 5.5.1 估值日切规则（RM0 DEC-002 已决策，2026-08-05）
+
+- `valuation_timezone: UTC`，`valuation_cutoff: 00:00`（详见 `doc/technical/02_config_environment.md`）。UTC 00:00 晚于美股夏令时收盘（20:00 UTC）与冬令时收盘（21:00 UTC）3–4 小时，且与加密资产原生 UTC 日K边界对齐，为固定 UTC 时刻，不受美股 DST 切换影响。
+- **按 UTC 自然日生成 `ValuationSnapshot`，全年 365 天，不跳过美股非交易日**：美股非交易日沿用上一交易日收盘价并显式标记 `price_status: stale`（复用 `03_universe_data.md` §8 的"市场休市/供应商缺失/尚未采集"三态区分）；加密资产照常取当日新数据。
+- 该规则同时约束 RM2 回测引擎：回测必须按自然日推进净值曲线，不能只按美股交易日推进，否则无法反映加密资产周末波动对组合风险的影响。
 
 ## 6. 功能需求
 
@@ -403,11 +429,11 @@ XR-Trading 是个人量化投资研究平台，不保证盈利。历史回测和
 
 ## 14. 待确认事项
 
-- MVP 首批美股、ETF 和加密资产清单。
+- ~~MVP 首批美股、ETF 和加密资产清单。~~ 已决策，见 §4.4（RM0 DEC-001，2026-08-05）。
 - 加密行情、基本数据和后续交易通道的供应商。
 - 首批组合模板及各自基准和风险预算。
-- 组合估值的日切时间和统一时区。
-- 是否支持碎股以及加密资产的小数精度规则。
-- 数据存储采用 SQLite、PostgreSQL、Parquet 的阶段划分。
+- ~~组合估值的日切时间和统一时区。~~ 已决策，见 §5.5.1（RM0 DEC-002，2026-08-05）。
+- ~~是否支持碎股以及加密资产的小数精度规则。~~ 已决策，见 §5.1.1（RM0 DEC-003，2026-08-05）。
+- ~~数据存储采用 SQLite、PostgreSQL、Parquet 的阶段划分。~~ 核心后端已决策，见 `.claude/standards/python-backend-standards.md` §3（RM0 DEC-005，2026-08-05）；批量历史行情的 Parquet 分工沿用 `doc/technical/03_universe_data.md` §6，未变。
 - 第一版仪表盘与报告的优先级。
 - 实盘前模拟运行时长和验收阈值。
