@@ -63,3 +63,5 @@ flowchart LR
 ## 7. 建议执行顺序（速览）
 
 先做 RM0 全部决策 → 并行启动 RM1 后端地基与 RM2 回测引擎 → 汇合到 RM3 Paper 纵切 → 再进入 RM4 深化与 RM5 实盘就绪。**在 RM3 跑通前，不投入资源继续打磨行情服务 M5 之外的能力。**
+
+RM0 已完成（见 `01_decisions.md`）。RM1、RM2 的可执行任务已细化为多 Agent 分波协作计划，见 [核心后端实施计划](../implementation_plan/README.md)（结构参照 `market_information_service/implementation_plan/`）。
