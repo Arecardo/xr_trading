@@ -34,6 +34,7 @@ MVP 支持：
 - 风控配置。
 - 交易成本配置。
 - 起始资金。
+- 各标的精度规则（`price_scale`/`quantity_scale`/`lot_size`/`min_quantity`），来源于 `market-info-service` 的 Instrument 目录，不得在回测引擎内硬编码（RM0 DEC-003）；缺失或过期时该标的当期 fail-closed，不生成撮合，需在回测报告中标记。
 
 ## 4. 回测配置示例
 
@@ -48,17 +49,20 @@ backtest:
   slippage_pct: 0.001
   benchmarks: [QQQ, BTC-USD]
   valuation_timezone: UTC
+  valuation_cutoff: "00:00"
 ```
 
 ## 5. 事件驱动流程
 
+**`time_step` 为 UTC 自然日，全周期 365 天/年推进，不因美股非交易日跳过**（RM0 DEC-002，与 `02_config_environment.md` 的 `valuation_cutoff` 定义一致）：美股非交易日沿用上一交易日收盘价并标记 `price_status: stale`，不生成新的交易信号（可评估现有持仓但不产生新的美股调仓建议）；加密资产照常取当日新数据、正常参与信号与撮合。此规则确保权益曲线连续反映加密资产周末波动对组合风险的影响。
+
 ```text
-for each time_step:
-  load market data
+for each utc_calendar_day:
+  load market data (equity: carry-forward + stale flag on non-trading days; crypto: fresh daily data)
   update portfolio market value
   generate indicators
   generate analysis scores
-  generate strategy signals
+  generate strategy signals (skip new equity signals when underlying price is stale)
   run risk checks
   simulate orders and fills
   update positions and cash
@@ -73,6 +77,7 @@ MVP 可采用以下规则：
 - 买入：使用下一交易日开盘价或当日收盘价，加上滑点。
 - 卖出：使用下一交易日开盘价或当日收盘价，减去滑点。
 - 限价单：若价格区间触及限价，则视为成交；否则未成交。
+- 成交数量按 `Decimal` 精度记录，不做整股取整（RM0 DEC-003）；按标的的 `lot_size`/`quantity_scale` 取整到最小步长，取整后数量低于 `min_quantity` 时该笔交易不成交并记录原因。
 
 具体规则必须写入回测报告，避免回测与实盘执行假设不一致。
 
@@ -82,8 +87,8 @@ MVP 可采用以下规则：
 {
   "start_date": "2024-01-01",
   "end_date": "2026-05-31",
-  "initial_cash": 2500,
-  "final_equity": 2875,
+  "initial_cash": "2500.00",
+  "final_equity": "2875.00",
   "total_return_pct": 0.15,
   "max_drawdown_pct": 0.08,
   "annualized_volatility": 0.18,
@@ -107,8 +112,8 @@ MVP 可采用以下规则：
   "asset_id": "equity:nasdaq:NVDA",
   "symbol": "NVDA",
   "side": "buy",
-  "quantity": 3,
-  "fill_price": 102.5,
+  "quantity": "2.438",
+  "fill_price": "102.50",
   "commission": 0.31,
   "slippage": 0.10,
   "signal_score": 78,
