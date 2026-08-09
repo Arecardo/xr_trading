@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${BACKEND_POSTGRES_DB:-xr_trading_core}
+      POSTGRES_USER: ${BACKEND_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${BACKEND_POSTGRES_PASSWORD:?set BACKEND_POSTGRES_PASSWORD in an untracked env file}
+    ports:
+      # Different host port than market-info-service's Postgres (5432) so
+      # both independent database instances can run side by side
+      # (project-conventions.md §2: no shared tables between services).
+      - "127.0.0.1:${BACKEND_POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BACKEND_POSTGRES_USER:-postgres} -d ${BACKEND_POSTGRES_DB:-xr_trading_core}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - backend-core-postgres:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  migrate:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app:ro
+    # No dedicated Dockerfile exists for the Python backend yet (BE-001
+    # only added the FastAPI skeleton, not a container image); installing
+    # the pinned dependency set at container start keeps this service
+    # self-contained without inventing build tooling out of scope for
+    # BE-002. Revisit once backend/ gets its own Dockerfile.
+    command: >
+      sh -c "pip install --no-cache-dir --quiet 'alembic>=1.13,<2.0' 'sqlalchemy>=2.0,<3.0' 'psycopg[binary]>=3.1,<4.0' &&
+             alembic upgrade head"
+    environment:
+      BACKEND_MIGRATION_DATABASE_URL: postgresql+psycopg://${BACKEND_POSTGRES_USER:-postgres}:${BACKEND_POSTGRES_PASSWORD:?set BACKEND_POSTGRES_PASSWORD in an untracked env file}@postgres:5432/${BACKEND_POSTGRES_DB:-xr_trading_core}?options=-c%20role%3Dxr_core_owner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  backend-core-postgres:

@@ -35,11 +35,24 @@ class AccountBindingRepository(Protocol):
     declares the interface only.
     """
 
-    def get_for_portfolio(self, portfolio_id: UUID, environment: str) -> AccountBinding:
-        """Return the binding for ``portfolio_id`` in ``environment``.
+    def get_for_portfolio(
+        self, portfolio_id: UUID, environment: str, broker_code: str
+    ) -> AccountBinding:
+        """Return the binding for ``portfolio_id`` in ``environment`` on ``broker_code``.
+
+        ``broker_code`` is required, not optional: a single portfolio
+        legitimately holds multiple simultaneous bindings in the same
+        environment (e.g. NVDA/QQQ via ``longbridge`` and BTC-USDT via
+        ``bybit`` in the same ``paper`` portfolio -- this is the actual
+        first-batch asset universe, not a hypothetical edge case). An
+        earlier draft of this signature omitted ``broker_code`` and was
+        caught by BE-002's repository implementation raising on the
+        resulting ambiguity; amended 2026-08-05 rather than left as a
+        "pick one" guess.
 
         Failure path: implementations raise a domain-specific not-found
-        error when no binding exists for this portfolio/environment pair.
+        error when no binding exists for this portfolio/environment/broker
+        combination.
         """
         ...
 

@@ -1,8 +1,29 @@
 """Data access implementations for the repository Protocols declared in ``domain``.
 
-Intentionally empty scaffolding for BE-001: ``AssetRepository``,
-``PortfolioRepository``, and ``AccountBindingRepository`` are declared as
-interfaces in their respective ``domain`` subpackages; PostgreSQL-backed
-implementations, connection pooling, and Alembic migrations are BE-002
-scope (CONTRACT-004).
+BE-002 (CONTRACT-004) landed:
+
+* ``schema.py`` -- SQLAlchemy Core ``Table``/``MetaData`` definitions for
+  all ten frozen tables (``assets``, ``portfolios``, ``portfolio_members``,
+  ``account_bindings``, ``positions``, ``cash_balances``,
+  ``valuation_snapshots``, ``performance_snapshots``, ``orders``, ``fills``).
+* ``database.py`` -- environment-variable-driven, fail-closed engine/pool
+  construction (sync ``psycopg`` for the repositories below and for
+  Alembic; async ``asyncpg`` as general-purpose infrastructure for future
+  consumers).
+* ``errors.py`` -- ``NotFoundError``/``CredentialReuseError``/
+  ``AmbiguousBindingError`` raised by the implementations below.
+* ``assets.py`` / ``portfolios.py`` / ``accounts.py`` -- concrete
+  implementations of ``AssetRepository``, ``PortfolioRepository``, and
+  ``AccountBindingRepository`` (CONTRACT-001 §0.1). These three Protocols'
+  methods are synchronous, so the implementations run on the sync engine.
+
+Migration coverage vs. repository coverage: all ten CONTRACT-004 tables
+exist via the Alembic migration in ``backend/migrations/versions/``, but
+only ``assets``, ``portfolios``/``portfolio_members``, and
+``account_bindings`` have repository implementations here.
+``positions``/``cash_balances``/``valuation_snapshots``/
+``performance_snapshots`` (BE-003, valuation) and ``orders``/``fills`` (a
+future execution task) are migration-only for now, by design -- CONTRACT-001
+does not freeze a ``ValuationService``/``ExecutionService`` implementation
+for this task to satisfy.
 """
