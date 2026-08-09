@@ -72,7 +72,7 @@ class AccountBinding:
     credential_ref: str  # 仅引用，不含密钥本身
 
 class AccountBindingRepository(Protocol):
-    def get_for_portfolio(self, portfolio_id: UUID, environment: str) -> AccountBinding: ...
+    def get_for_portfolio(self, portfolio_id: UUID, environment: str, broker_code: str) -> AccountBinding: ...
     def assert_no_credential_reuse(self, paper_ref: str, live_ref: str) -> None: ...
 
 
@@ -219,7 +219,7 @@ class RiskPolicy(Protocol):
 
 | 表 | 关键列 | 约束要点 |
 | --- | --- | --- |
-| `assets` | `asset_id text PK`、`asset_type`、`symbol`、`venue`、`quote_currency`、`provider_symbols jsonb`、`trading_status`、`created_at`/`updated_at timestamptz` | `asset_id` 格式校验（`type:venue:symbol`） |
+| `assets` | `asset_id text PK`、`asset_type`、`symbol`、`venue`、`quote_currency`、`provider_symbols jsonb`、`trading_status`、`created_at`/`updated_at timestamptz` | `asset_id` 格式校验：`asset_type=CASH` 用两段 `cash:CURRENCY`（如 `cash:USD`，现金没有交易场所概念）；其余类型用三段 `type:venue:symbol`（如 `equity:nasdaq:NVDA`）。两种格式均已是 `project-conventions.md` §4 的既有约定，非新决策，2026-08-05 补充明确写入 DDL 校验规则，之前只在此处遗漏 |
 | `portfolios` | `portfolio_id uuid PK`、`name`、`base_currency`、`benchmark_asset_id text FK→assets NULL`、`risk_level`、`execution_mode`、`status`、时间戳 | `execution_mode`/`status` 用 `CHECK` 约束枚举值 |
 | `portfolio_members` | `portfolio_id FK`、`asset_id FK`、`member_status`、`target_weight_min numeric(9,6)`、`target_weight_max numeric(9,6)`、`added_at` | `PRIMARY KEY(portfolio_id, asset_id)` |
 | `account_bindings` | `account_binding_id uuid PK`、`portfolio_id FK`、`broker_code`、`environment`、`credential_ref text`、`created_at` | `credential_ref` 只存引用；`UNIQUE(portfolio_id, broker_code, environment)` |
@@ -236,13 +236,14 @@ class RiskPolicy(Protocol):
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-001 | READY | DEC-005、CONTRACT-001（已冻结） | 按 `api/application/domain/adapters/repository/config/observability` 拆分 `backend/`；`app.py` 只保留进程装配；七个领域子包按冻结签名建立骨架（可先返回 `NotImplementedError` 占位） | 现有认证、组合 CRUD、成员管理接口回归通过；目录结构符合 `python-backend-standards.md` §2；`mypy` 对核心领域包通过 |
+| BE-001 | DONE（2026-08-05） | DEC-005、CONTRACT-001（已冻结） | 按 `api/application/domain/adapters/repository/config/observability` 拆分 `backend/`；`app.py` 只保留进程装配；七个领域子包按冻结签名建立骨架（可先返回 `NotImplementedError` 占位） | 现有认证、组合 CRUD、成员管理接口回归通过（**已明确延后到 BE-002/BE-003 落地后**）；目录结构符合 `python-backend-standards.md` §2 ✅；`mypy`/`ruff`/`pytest` 全过（57 tests）✅ |
 
 ## 2. BE-002 持久化落地
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-002 | TODO | DEC-005、BE-001、CONTRACT-004 | PostgreSQL + Alembic 版本化 migration + 连接池；独立数据库实例/角色，不与行情服务共享表；Compose 服务定义复用 `market-info-service/compose.yaml` 模式（独立 `POSTGRES_DB`/角色、健康检查、独立 volume） | migration 可在空库重复执行；repository 读写有隔离数据库集成测试；领域层不泄漏 `psycopg`/ORM 特有类型；金额字段全部使用 `Decimal` |
+| BE-002 | DONE（2026-08-05） | DEC-005、BE-001（已完成）、CONTRACT-004（已冻结） | PostgreSQL + Alembic 版本化 migration + 连接池；独立数据库实例/角色，不与行情服务共享表；`backend/compose.yaml` 复用 `market-info-service/compose.yaml` 模式；`AssetRepository`/`PortfolioRepository`/`AccountBindingRepository` 三个已冻结接口的具体实现（`positions`/`cash_balances`/`valuation_snapshots`/`performance_snapshots`/`orders`/`fills` 仅建表，服务层逻辑留给 BE-003/未来的执行任务） | migration 在真实 Postgres（本地 colima）上验证可重复执行 ✅；repository 集成测试针对真实 Postgres（138 passed，无 DB 时 18 个集成测试正确 skip）✅；`domain/` 零 SQLAlchemy/DB 依赖（`test_no_infra_leakage.py` 仍过）✅；金额字段 `Decimal` ✅ |
+| **BE-002 遗留的契约问题 — 整合负责人裁定结果（2026-08-05）** | — | — | 1) **同步 vs 异步**：维持 CONTRACT-001 三个 Repository Protocol 为同步方法，不改冻结签名——单用户个人平台，数据量小，FastAPI 对同步端点自动走线程池，不需要为此引入复杂度；已建的异步连接池基础设施予以保留（成本低、BE-003/BE-004 大概率会用到 async httpx 调用行情服务，即使不直接用于 DB 也不亏），但若 BE-003/BE-004 完成后确认用不到，应删除而非无限期闲置。2) **`asset_id` 格式**：非新问题，`project-conventions.md` §4 早已约定 `cash:USD` 两段、`equity:nasdaq:NVDA` 三段并存；已在上表 `assets` 行写清规则，CONTRACT-004 DDL 描述之前遗漏，非需要重新决策。3) **`broker_code` 参数缺失**：**已确认是真实设计缺陷，非边缘情况**——首批标的清单本身就要求同一 `paper` 组合同时绑定 longbridge（NVDA/QQQ）和 bybit（BTC-USDT），"多 broker 绑定"是必然会发生的正常场景，不是极端输入。已修正 `AccountBindingRepository.get_for_portfolio` 签名为 `(portfolio_id, environment, broker_code)`（`backend/domain/accounts/models.py`、`repository/accounts.py`、对应测试同步更新），并在真实 Postgres（本地 colima）上重新验证 138 个测试全过。`AmbiguousBindingError` 语义相应改为"schema 唯一约束被绕过时的兜底报错"，不再是正常业务路径。 | — |
 
 ## 3. M1 退出门禁
 

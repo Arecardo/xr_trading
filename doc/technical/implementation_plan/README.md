@@ -71,8 +71,10 @@ M1 与 M2' 在 M0 冻结后即可并行；M2 依赖 M1（复用同一批 reposit
 | --- | --- | --- |
 | RM0 DEC-001/002/003/005 | DONE | 已写入需求文档与对应规范，RM0 退出条件已满足 |
 | M0 契约冻结（CONTRACT-001~005） | DONE（已冻结，2026-08-05） | 签名/DDL/API schema 已写入 `01_contracts_and_foundation.md`、`02_portfolio_and_market_integration.md`，已经你确认冻结 |
-| BE-001、BE-004a | READY | 依赖的契约草案已就绪，可开工；BE-004a 修改 `market-info-service`，BE-001 修改 `backend`，互不冲突 |
-| 其余任务（BE-002/003/004、BT-001~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
+| BE-001、BE-004a | DONE（2026-08-05） | 详见各自专题计划文档；BE-004a 发现 BTC-USDT 精度因网络限制暂为占位值，RM3/RM5 前需核实 |
+| BE-002、BT-001 | DONE（2026-08-05） | 详见 `01_contracts_and_foundation.md`、`03_backtest_data_and_indicators.md`；BE-002 提出 3 个待整合负责人裁定的契约问题（同步方法 vs 异步驱动、`asset_id` 格式歧义、`AccountBindingRepository` 缺 `broker_code` 参数），BT-001 的美股节假日日历不含临时性闭市 |
+| BE-003、BE-004、BT-002 | READY | BE-003/BE-004 依赖的 BE-001/BE-002/BE-004a 已完成；BT-002 依赖的 BT-001 已完成 |
+| 其余任务（BT-003~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
 
 ## 7. 首期明确不做
 

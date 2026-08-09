@@ -51,7 +51,7 @@ POST /api/market-info/v1/instruments/precision:batch
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-004a | READY | CONTRACT-005（已冻结） | `/instruments` 响应补充 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity`；新增按 `instrument_id` 列表批量查询精度的端点；采集并写入 NVDA、QQQ、BTC-USDT 三个 Instrument 的真实精度值 | API 契约测试覆盖批量查询与字段完整性；三个标的的精度值可查询到且非空；不引入需要迁移市场服务数据库表结构以外的破坏性变更 |
+| BE-004a | DONE（2026-08-05） | CONTRACT-005（已冻结） | 新增 `POST /instruments/precision:batch` 批量端点（未改动既有 `/instruments` 响应，见实现报告）；`FindInstrumentsByIDs` repository 方法；NVDA/QQQ/BTC-USDT 三个 Instrument 的种子数据 | API 契约测试覆盖批量查询与字段完整性 ✅；NVDA/QQQ 精度为长桥官方真实值 ✅；**BTC-USDT 精度四项仍是显式 `PLACEHOLDER`，未核实**（网络无法访问 Bybit API，见 `roadmap/01_decisions.md` DEC-003 未决附注），RM3/RM5 前必须核实 |
 
 此任务修改 `market-info-service`（Go），与其余任务修改的 `backend`（Python）是不同目录，可独立并行、独立提交。
 
