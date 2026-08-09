@@ -45,7 +45,7 @@ POST /api/market-info/v1/instruments/precision:batch
 - `missing_instrument_ids` 显式列出请求了但目录里没有精度数据的 instrument，`backend` 据此直接触发 fail-closed，不需要自己从空结果推断。
 - decimal 字段（`lot_size`/`min_quantity`）序列化为字符串，与仓库统一约定一致；`price_scale`/`quantity_scale` 是整数（小数位数），按数字传输。
 - `as_of` 是该精度数据最近校验/采集的时间戳，供 `backend` 判断缓存新鲜度或排查数据陈旧问题，不强制要求逐次比较。
-- 具体路由前缀/版本号需与 BE-004a 实现者最终对齐现有 `market-info-service` 路由注册方式（`07_api_and_admin_ui.md` §2.4 提到公共查询路由统一装配）。
+- 具体路由前缀/版本号需与 BE-004a 实现者最终对齐现有 `market-info-service` 路由注册方式（`07_api_and_admin_ui.md` §2.5 提到公共查询路由统一装配；实现记录见该文档 §2.4）。
 
 ## 1. BE-004a 行情服务补齐精度字段与批量查询（market-info-service 侧）
 

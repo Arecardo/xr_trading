@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,6 +149,21 @@ func TestQRY004PublicQueryHTTPContractIsReadOnly(t *testing.T) {
 		t.Fatalf("bar contract response = %#v", bars.Bars[0])
 	}
 
+	var precision qry004PrecisionResponse
+	unknownID := newIntegrationID(t)
+	precisionBody := `{"instrument_ids":["` + instrumentID.String() + `","` + unknownID.String() + `"]}`
+	qry004ServeJSONPost(t, handler, "/api/market-info/v1/instruments/precision:batch", precisionBody, &precision)
+	// The QRY004 core fixture (createCoreFixture) never sets price_scale,
+	// quantity_scale, lot_size or min_quantity, so both the known-but-
+	// incomplete instrument and the wholly unknown one must fail closed into
+	// missing_instrument_ids rather than being silently omitted.
+	if len(precision.Items) != 0 {
+		t.Fatalf("precision items = %#v, want none (fixture instrument has no precision data)", precision.Items)
+	}
+	if len(precision.MissingInstrumentIDs) != 2 || precision.MissingInstrumentIDs[0] != instrumentID.String() || precision.MissingInstrumentIDs[1] != unknownID.String() {
+		t.Fatalf("precision missing_instrument_ids = %#v", precision.MissingInstrumentIDs)
+	}
+
 	after := qry004MutationSnapshot(t, ctx, admin)
 	if before != after {
 		t.Fatalf("public queries changed persistent state: before=%+v after=%+v", before, after)
@@ -176,8 +192,14 @@ func qry004PublicHandler(t *testing.T, catalog *repositorypostgres.CatalogReposi
 	if err != nil {
 		t.Fatalf("NewBarsService() error = %v", err)
 	}
+	precision, err := application.NewInstrumentPrecisionService(catalog, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("NewInstrumentPrecisionService() error = %v", err)
+	}
 	mux := http.NewServeMux()
-	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{InstrumentOptions: options, LatestQuotes: quotes, Bars: bars}); err != nil {
+	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{
+		InstrumentOptions: options, InstrumentPrecision: precision, LatestQuotes: quotes, Bars: bars,
+	}); err != nil {
 		t.Fatalf("RegisterPublicQueryRoutes() error = %v", err)
 	}
 	return httpapi.WithRequestID(mux)
@@ -230,6 +252,24 @@ func qry004ServeJSON(t *testing.T, handler http.Handler, path string, target any
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		t.Fatalf("decode GET %s response: %v; body=%s", path, err, response.Body.String())
+	}
+}
+
+func qry004ServeJSONPost(t *testing.T, handler http.Handler, path, body string, target any) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, body = %s", path, response.Code, response.Body.String())
+	}
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(response.Header().Get("Content-Type"))
+	if mediaTypeErr != nil || mediaType != "application/json" || !httpapi.ValidRequestID(response.Header().Get(httpapi.RequestIDHeader)) {
+		t.Fatalf("POST %s headers = %#v", path, response.Header())
+	}
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		t.Fatalf("decode POST %s response: %v; body=%s", path, err, response.Body.String())
 	}
 }
 
@@ -337,6 +377,19 @@ type qry004QuoteResponse struct {
 	MarketTime             string  `json:"market_time"`
 	ReceivedAt             string  `json:"received_at"`
 	QualityStatus          string  `json:"quality_status"`
+}
+
+type qry004PrecisionResponse struct {
+	Items []struct {
+		InstrumentID   string `json:"instrument_id"`
+		InstrumentCode string `json:"instrument_code"`
+		PriceScale     int16  `json:"price_scale"`
+		QuantityScale  int16  `json:"quantity_scale"`
+		LotSize        string `json:"lot_size"`
+		MinQuantity    string `json:"min_quantity"`
+		AsOf           string `json:"as_of"`
+	} `json:"items"`
+	MissingInstrumentIDs []string `json:"missing_instrument_ids"`
 }
 
 type qry004BarsResponse struct {

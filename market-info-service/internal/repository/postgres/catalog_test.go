@@ -414,6 +414,96 @@ func TestCatalogRepositoryInstrumentProviderOptionsFailures(t *testing.T) {
 	}
 }
 
+func TestCatalogRepositoryFindsInstrumentsByIDs(t *testing.T) {
+	now := time.Date(2026, time.July, 15, 8, 0, 0, 0, time.UTC)
+	firstID := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160f")
+	secondID := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160e")
+	assetID := uuid.MustParse("019f1452-90f7-7992-a87a-ca272789160d")
+	rows := &fakeRows{rows: []scanFunc{
+		instrumentRow(firstID, assetID, "instrument.nasdaq.equity.nvda", now),
+		instrumentRow(secondID, assetID, "instrument.bybit.spot.btc-usdt", now),
+	}}
+	database := fakeCatalogDatabase{
+		query: func(_ context.Context, query string, args ...any) (pgx.Rows, error) {
+			if !strings.Contains(query, "id = ANY($1)") || !strings.Contains(query, "FROM core.instruments") {
+				t.Fatalf("query does not select instruments by ID: %s", query)
+			}
+			ids, ok := args[0].([]uuid.UUID)
+			if !ok || len(ids) != 2 || ids[0] != firstID || ids[1] != secondID {
+				t.Fatalf("query args = %#v", args)
+			}
+			return rows, nil
+		},
+	}
+	repository, _ := newCatalogRepository(database)
+	instruments, err := repository.FindInstrumentsByIDs(context.Background(), []domain.ID{domain.IDFromUUID(firstID), domain.IDFromUUID(secondID)})
+	if err != nil {
+		t.Fatalf("FindInstrumentsByIDs() error = %v", err)
+	}
+	if len(instruments) != 2 || instruments[0].ID.UUID() != firstID || instruments[1].ID.UUID() != secondID || !rows.closed {
+		t.Fatalf("FindInstrumentsByIDs() = %#v, closed=%t", instruments, rows.closed)
+	}
+}
+
+func TestCatalogRepositoryFindInstrumentsByIDsFailures(t *testing.T) {
+	repository, _ := newCatalogRepository(fakeCatalogDatabase{})
+	if _, err := repository.FindInstrumentsByIDs(context.Background(), nil); !errors.Is(err, domain.ErrInvalidData) {
+		t.Fatalf("FindInstrumentsByIDs(nil) error = %v", err)
+	}
+	if _, err := repository.FindInstrumentsByIDs(context.Background(), []domain.ID{{}}); !errors.Is(err, domain.ErrInvalidData) {
+		t.Fatalf("FindInstrumentsByIDs(zero ID) error = %v", err)
+	}
+
+	databaseError := &pgconn.PgError{Code: "08006"}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) {
+		return nil, databaseError
+	}})
+	if _, err := repository.FindInstrumentsByIDs(context.Background(), []domain.ID{domain.IDFromUUID(uuid.New())}); !errors.Is(err, domain.ErrDatabaseUnavailable) {
+		t.Fatalf("FindInstrumentsByIDs(query error) = %v", err)
+	}
+
+	badRows := &fakeRows{rows: []scanFunc{func(...any) error { return errors.New("scan") }}}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) { return badRows, nil }})
+	if _, err := repository.FindInstrumentsByIDs(context.Background(), []domain.ID{domain.IDFromUUID(uuid.New())}); err == nil || !strings.Contains(err.Error(), "scan instrument") {
+		t.Fatalf("FindInstrumentsByIDs(scan error) = %v", err)
+	}
+
+	iterationRows := &fakeRows{err: databaseError}
+	repository, _ = newCatalogRepository(fakeCatalogDatabase{query: func(context.Context, string, ...any) (pgx.Rows, error) { return iterationRows, nil }})
+	if _, err := repository.FindInstrumentsByIDs(context.Background(), []domain.ID{domain.IDFromUUID(uuid.New())}); !errors.Is(err, domain.ErrDatabaseUnavailable) {
+		t.Fatalf("FindInstrumentsByIDs(iteration error) = %v", err)
+	}
+}
+
+func instrumentRow(id, assetID uuid.UUID, code string, now time.Time) scanFunc {
+	priceScale := int16(2)
+	quantityScale := int16(0)
+	lotSize := decimal.RequireFromString("1")
+	minQuantity := decimal.RequireFromString("1")
+	return func(destinations ...any) error {
+		*destinations[0].(*uuid.UUID) = id
+		*destinations[1].(*string) = code
+		*destinations[2].(*uuid.UUID) = assetID
+		*destinations[3].(*string) = "NASDAQ"
+		*destinations[4].(*string) = "EQUITY"
+		*destinations[5].(*string) = "NVDA"
+		*destinations[6].(**uuid.UUID) = nil
+		*destinations[7].(*string) = "USD"
+		*destinations[8].(*string) = "America/New_York"
+		*destinations[9].(**int16) = &priceScale
+		*destinations[10].(**int16) = &quantityScale
+		*destinations[11].(**decimal.Decimal) = &lotSize
+		*destinations[12].(**decimal.Decimal) = &minQuantity
+		*destinations[13].(*string) = "active"
+		*destinations[14].(**time.Time) = nil
+		*destinations[15].(**time.Time) = nil
+		*destinations[16].(*[]byte) = nil
+		*destinations[17].(*time.Time) = now
+		*destinations[18].(*time.Time) = now
+		return nil
+	}
+}
+
 func testCode(t *testing.T, value string) domain.Code {
 	t.Helper()
 	code, err := domain.ParseCode(value)

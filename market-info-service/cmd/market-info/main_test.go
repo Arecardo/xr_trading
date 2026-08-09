@@ -14,6 +14,7 @@ import (
 
 	"xr-trading/market-info-service/internal/api/httpapi"
 	"xr-trading/market-info-service/internal/config"
+	"xr-trading/market-info-service/internal/database/migrations"
 	"xr-trading/market-info-service/internal/database/postgres"
 	"xr-trading/market-info-service/internal/markettime"
 	"xr-trading/market-info-service/internal/server"
@@ -25,7 +26,7 @@ func TestRunServeWiresDependencies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	db := &stubPool{version: 5}
+	db := &stubPool{version: migrations.LatestVersion}
 	var openedConfig postgres.Config
 	var serverConfig server.Config
 	err := run(ctx, []string{"serve"}, validRuntimeConfig, func(_ context.Context, cfg postgres.Config) (pooledDB, error) {
@@ -144,7 +145,7 @@ func TestRunDefaultsToServeMode(t *testing.T) {
 	cancel()
 
 	err := run(ctx, nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
-		return &stubPool{version: 5}, nil
+		return &stubPool{version: migrations.LatestVersion}, nil
 	}, server.New)
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
@@ -201,11 +202,19 @@ func TestRunRejectsInvalidInput(t *testing.T) {
 		wantError string
 	}{
 		{"missing dependency", nil, nil, nil, nil, "configuration loader and database opener"},
-		{"unsupported mode", []string{"other"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "unsupported mode"},
-		{"too many modes", []string{"serve", "worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "at most one"},
-		{"config error", nil, func(config.RuntimeMode) (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, server.New, "load configuration"},
+		{"unsupported mode", []string{"other"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
+			return &stubPool{version: migrations.LatestVersion}, nil
+		}, server.New, "unsupported mode"},
+		{"too many modes", []string{"serve", "worker"}, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
+			return &stubPool{version: migrations.LatestVersion}, nil
+		}, server.New, "at most one"},
+		{"config error", nil, func(config.RuntimeMode) (config.Config, error) { return config.Config{}, errors.New("bad env") }, func(context.Context, postgres.Config) (pooledDB, error) {
+			return &stubPool{version: migrations.LatestVersion}, nil
+		}, server.New, "load configuration"},
 		{"open error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return nil, errors.New("db down") }, server.New, "open database pool"},
-		{"server error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) { return &stubPool{version: 5}, nil }, func(server.Config, http.Handler) (*server.Server, error) { return nil, errors.New("bad server") }, "create HTTP server"},
+		{"server error", nil, validRuntimeConfig, func(context.Context, postgres.Config) (pooledDB, error) {
+			return &stubPool{version: migrations.LatestVersion}, nil
+		}, func(server.Config, http.Handler) (*server.Server, error) { return nil, errors.New("bad server") }, "create HTTP server"},
 	}
 
 	for _, tt := range tests {

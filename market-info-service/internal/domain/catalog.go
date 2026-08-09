@@ -89,6 +89,10 @@ type SubscriptionPage struct {
 type CatalogRepository interface {
 	FindAssetByCode(context.Context, string) (Asset, error)
 	FindInstrumentByCode(context.Context, string) (Instrument, error)
+	// FindInstrumentsByIDs returns every Instrument matching one of ids. It is
+	// not an error for some ids to be absent from the result; callers compare
+	// the requested set against the returned set to detect gaps.
+	FindInstrumentsByIDs(context.Context, []ID) ([]Instrument, error)
 }
 
 // ProviderRepository stores provider configuration and provider mappings.

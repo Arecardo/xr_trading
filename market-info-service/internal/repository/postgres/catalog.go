@@ -217,6 +217,46 @@ func (repository *CatalogRepository) FindInstrumentByCode(ctx context.Context, c
 	return instrument, nil
 }
 
+// FindInstrumentsByIDs returns every core Instrument matching one of ids.
+// Absent ids are simply missing from the result; callers detect gaps by
+// comparing the requested set against the returned set.
+func (repository *CatalogRepository) FindInstrumentsByIDs(ctx context.Context, ids []domain.ID) ([]domain.Instrument, error) {
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("find instruments by IDs: %w", domain.ErrInvalidData)
+	}
+	databaseIDs := make([]uuid.UUID, len(ids))
+	for index, id := range ids {
+		if id.IsZero() {
+			return nil, fmt.Errorf("find instruments by IDs: %w", domain.ErrInvalidData)
+		}
+		databaseIDs[index] = IDToDatabase(id)
+	}
+	query, args, err := sqlbuilder.Select(instrumentColumns...).From("core.instruments").
+		Where(sqlbuilder.Raw("id = ANY(?)", databaseIDs)).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build instruments by IDs query: %w", err)
+	}
+
+	rows, err := repository.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find instruments by IDs: %w", MapError(err))
+	}
+	defer rows.Close()
+
+	instruments := make([]domain.Instrument, 0, len(ids))
+	for rows.Next() {
+		instrument, scanErr := scanInstrument(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan instrument: %w", MapError(scanErr))
+		}
+		instruments = append(instruments, instrument)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate instruments by IDs: %w", MapError(err))
+	}
+	return instruments, nil
+}
+
 // CreateProvider stores a Provider in the market_data schema.
 func (repository *CatalogRepository) CreateProvider(ctx context.Context, provider domain.Provider) error {
 	provider, err := domain.NewProvider(provider)

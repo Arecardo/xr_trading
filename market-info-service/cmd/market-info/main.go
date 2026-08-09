@@ -160,6 +160,10 @@ func buildHTTPServer(cfg config.Config, pool pooledDB, createServer newServer, l
 	if err != nil {
 		return nil, fmt.Errorf("create instrument options service: %w", err)
 	}
+	instrumentPrecision, err := application.NewInstrumentPrecisionService(catalog, time.Now)
+	if err != nil {
+		return nil, fmt.Errorf("create instrument precision service: %w", err)
+	}
 	latestQuoteReader, err := repositorypostgres.NewLatestQuoteQueryRepository(pool)
 	if err != nil {
 		return nil, fmt.Errorf("create latest quote query repository: %w", err)
@@ -240,9 +244,10 @@ func buildHTTPServer(cfg config.Config, pool pooledDB, createServer newServer, l
 		return nil, fmt.Errorf("register metrics route: %w", err)
 	}
 	if err := httpapi.RegisterPublicQueryRoutes(mux, httpapi.PublicQueryRoutes{
-		InstrumentOptions: instrumentOptions,
-		LatestQuotes:      latestQuotes,
-		Bars:              bars,
+		InstrumentOptions:   instrumentOptions,
+		InstrumentPrecision: instrumentPrecision,
+		LatestQuotes:        latestQuotes,
+		Bars:                bars,
 	}); err != nil {
 		return nil, fmt.Errorf("register public query routes: %w", err)
 	}

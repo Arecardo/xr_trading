@@ -26,6 +26,10 @@ func (*stubInstrumentOptionsCatalog) FindInstrumentByCode(context.Context, strin
 	return domain.Instrument{}, errors.New("not implemented")
 }
 
+func (*stubInstrumentOptionsCatalog) FindInstrumentsByIDs(context.Context, []domain.ID) ([]domain.Instrument, error) {
+	return nil, errors.New("not implemented")
+}
+
 type stubInstrumentOptionsReader struct {
 	rows   []InstrumentProviderOptionRecord
 	err    error

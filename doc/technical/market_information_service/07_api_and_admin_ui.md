@@ -220,10 +220,24 @@ Asset -> Instrument -> Provider -> Interval
 }
 ```
 
-### 2.4 公共查询路由与只读边界
+### 2.4 批量精度查询
 
-- `/instruments`、`/quotes/latest`、`/bars` 作为一组公共查询路由统一装配，生产入口与数据库集成测试使用同一注册函数，避免测试路由和真实服务漂移。
-- 三个端点首期只接受 `GET`，不经过管理权限中间件；其他方法由路由层返回 `405 Method Not Allowed`。
+```http
+POST /api/market-info/v1/instruments/precision:batch
+```
+
+BE-004a 实现，冻结契约见 `doc/technical/implementation_plan/02_portfolio_and_market_integration.md` §0（CONTRACT-005），此处只记录与本文档其余公共查询一致的实现约定：
+
+- 与 `/instruments`、`/quotes/latest`、`/bars` 同属公共只读查询，不经过管理权限中间件；仅接受 `POST`，其他方法返回 `405 Method Not Allowed`。
+- `instrument_ids` 为空、包含非法 UUID 或超过单次批量上限（100）时返回 `400 INVALID_ARGUMENT`；请求内重复 ID 去重后按首次出现顺序处理。
+- `missing_instrument_ids` 除契约文本明确的"目录中无精度数据"外，还包含：未知 ID、`status != active` 的 Instrument、以及不在 `[valid_from, valid_to)` 当前有效窗口内的 Instrument——与 `/instruments`、`/quotes/latest` 已有的 fail-closed 口径保持一致，调用方不需要自行判断这些边界情况。
+- `as_of` 直接使用 Instrument 的 `updated_at`（真实数据库时间戳，非精度校验专用字段；该字段目前不区分"精度值本身何时被验证"与"整行记录何时被修改"，后续如需要更细粒度的精度校验时间戳应新增专门字段，而非复用 `updated_at`）。
+- `lot_size`/`min_quantity` 序列化为字符串；`missing_instrument_ids` 始终返回数组（可为空数组，不返回 `null`）。
+
+### 2.5 公共查询路由与只读边界
+
+- `/instruments`、`/instruments/precision:batch`、`/quotes/latest`、`/bars` 作为一组公共查询路由统一装配，生产入口与数据库集成测试使用同一注册函数，避免测试路由和真实服务漂移。
+- 四个端点首期只接受各自的单一 HTTP 方法（前三者 `GET`，批量精度查询 `POST`），不经过管理权限中间件；其他方法由路由层返回 `405 Method Not Allowed`。
 - 公共查询统一经过 Request ID 中间件，并使用相同的 JSON、错误 envelope、UTC、decimal 和游标约束。
 - 查询链路只允许调用 query service 和只读 repository，不调用 Adapter、Scheduler、Worker 或任务写 repository。
 - PostgreSQL 集成验收以同一批 Asset、Instrument、两个 Provider、两个 ProviderInstrument、最新行情和 K 线数据贯穿三个 HTTP 端点；查询前后核对订阅、Run、Task、checkpoint、最新行情、K 线和质量问题表，必须全部无变化。

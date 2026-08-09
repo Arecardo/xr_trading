@@ -10,9 +10,10 @@ import (
 // Keeping the route set together makes production and integration-test
 // assembly follow the same contract.
 type PublicQueryRoutes struct {
-	InstrumentOptions InstrumentOptionsQuery
-	LatestQuotes      LatestQuotesQuery
-	Bars              BarsQuery
+	InstrumentOptions   InstrumentOptionsQuery
+	InstrumentPrecision InstrumentPrecisionQuery
+	LatestQuotes        LatestQuotesQuery
+	Bars                BarsQuery
 }
 
 // RegisterPublicQueryRoutes attaches every public market query endpoint.
@@ -24,6 +25,10 @@ func RegisterPublicQueryRoutes(mux *http.ServeMux, routes PublicQueryRoutes) err
 	if err != nil {
 		return fmt.Errorf("create instrument options handler: %w", err)
 	}
+	instrumentPrecision, err := NewInstrumentPrecisionHandler(routes.InstrumentPrecision)
+	if err != nil {
+		return fmt.Errorf("create instrument precision handler: %w", err)
+	}
 	latestQuotes, err := NewLatestQuotesHandler(routes.LatestQuotes)
 	if err != nil {
 		return fmt.Errorf("create latest quote handler: %w", err)
@@ -34,6 +39,9 @@ func RegisterPublicQueryRoutes(mux *http.ServeMux, routes PublicQueryRoutes) err
 	}
 	if err := instrumentOptions.Register(mux); err != nil {
 		return fmt.Errorf("register instrument options handler: %w", err)
+	}
+	if err := instrumentPrecision.Register(mux); err != nil {
+		return fmt.Errorf("register instrument precision handler: %w", err)
 	}
 	if err := latestQuotes.Register(mux); err != nil {
 		return fmt.Errorf("register latest quote handler: %w", err)

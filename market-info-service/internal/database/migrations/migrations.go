@@ -16,7 +16,7 @@ const (
 	// VersionTable is owned by the market-data migration role.
 	VersionTable = "market_data.schema_migrations"
 	// LatestVersion is the newest migration compiled into this build.
-	LatestVersion int64 = 5
+	LatestVersion int64 = 6
 )
 
 //go:embed sql/*.sql
