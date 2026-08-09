@@ -1,0 +1,82 @@
+[project]
+name = "xr-trading-backend"
+version = "0.1.0"
+description = "XR-Trading core business backend: portfolios, accounts, strategies, risk, execution, valuation."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "pydantic>=2.9,<3.0",
+    "httpx>=0.27,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6,<1.0",
+    "mypy>=1.11,<2.0",
+    "pytest>=8.3,<9.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "api*",
+    "application*",
+    "domain*",
+    "adapters*",
+    "repository*",
+    "config*",
+    "observability*",
+]
+exclude = ["tests*"]
+
+# --- ruff: lint + format (python-backend-standards.md §4, §10) ---
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# app.py is the legacy stdlib http.server + SQLite prototype, kept untouched
+# as historical reference (python-backend-standards.md §3) -- it predates
+# this tooling and is intentionally excluded from lint/format enforcement.
+extend-exclude = ["app.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "C4"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "api",
+    "application",
+    "domain",
+    "adapters",
+    "repository",
+    "config",
+    "observability",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# --- mypy: full type annotations required, core domain must pass (§4, §10) ---
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+# app.py is the legacy stdlib http.server + SQLite prototype, kept untouched
+# as historical reference (python-backend-standards.md §3); it predates
+# this tooling and is intentionally excluded from type-checking.
+exclude = ["^app\\.py$"]
+
+# --- pytest (§9, §10) ---
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
