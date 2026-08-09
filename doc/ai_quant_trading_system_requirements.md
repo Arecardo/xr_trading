@@ -162,10 +162,11 @@ User
 
 #### 5.1.1 碎股与精度规则（RM0 DEC-003 已决策，2026-08-05）
 
-- **碎股**：`research`/`backtest`/`paper` 环境下单数量内部一律使用 `Decimal` 任意精度记录，不做整股取整。理由：首批组合初始资金约 2,500 美元（§4.2），NVDA/QQQ 单股价值本身可能占组合 5%~20%，整股取整会导致目标权重与实际持仓严重偏离，使风控权重上限失去意义。`live` 环境碎股下单需在 RM5 前单独核实长桥 Open API 是否支持程序化提交碎股订单；若不支持，执行层须采用「整股取整 + 剩余现金留存」兜底规则，不得默认碎股在实盘下必然可用。
+- **碎股（2026-08-05 补充修订，见下方修订说明）**：**`research`/`backtest` 环境内部下单数量不受 `lot_size` 约束，一律使用 `Decimal` 任意精度记录**，理由不变——首批组合初始资金约 2,500 美元（§4.2），NVDA/QQQ 单股价值本身可能占组合 5%~20%，整股取整会导致目标权重与实际持仓严重偏离。**`paper`/`live` 环境下单数量必须遵守 `Instrument` 目录里的真实 `lot_size`/`quantity_scale`/`min_quantity`（不得自行放宽为小数）**，因为 `paper` 通过长桥模拟盘 API 实际下单（`02_config_environment.md` `trading.adapters.US: longbridge`），与 `live` 走同一套订单提交接口、同一套经纪商规则，不是纯内部模拟。长桥官方规则已确认「美股最小交易单位是 1 股，暂不支持碎股交易」（见待办项精度数据来源），因此 NVDA/QQQ 在 `paper`/`live` 下只能整股成交；这意味着 $2,500 初始资金在 `paper` 阶段的目标权重跟踪误差是真实存在的约束，不是可以靠内部模拟规避的问题。
+- **修订说明**：本条最初写作"`research`/`backtest`/`paper` 均不整股取整"，在 BE-004a 采集到长桥真实精度规则后发现与"`paper` 走真实经纪商下单接口"矛盾，于 2026-08-05 修正为按环境区分。**验证计划**：RM2 的 BT-003/BT-006 落地后，先跑两轮 NVDA/QQQ 回测对比（一轮不受 `lot_size` 约束、一轮按 `lot_size=1` 整股取整），用跟踪误差/收益差异的实际数据决定是否需要提高初始资金、调整标的选择或接受该约束，而非现在拍脑袋决定。
 - **精度规则来源**：`price_scale`、`quantity_scale`、`lot_size`、`min_quantity` 唯一真相来源是 `market-info-service` 的 `Instrument` 目录（见 `doc/technical/market_information_service/02_domain_model.md` §6.2），由行情服务从 Bybit/长桥采集并维护。`backend` 通过行情服务 API 读取，**不得在 Python 侧硬编码任何具体精度数值**（交易所规则会变，硬编码值会静默过期并引入资金风险）。目录中对应 Instrument 缺失或精度数据过期时，下单前必须 fail-closed（拒绝生成订单），不得使用猜测默认值兜底，与安全规范"缺关键凭据 fail-closed"同一原则。
 - **跨服务交互方式**：沿用现有 HTTP JSON API，不引入 gRPC/protobuf。`backend` 通过一个批量端点一次性查询多个 `instrument_id` 的精度字段（避免逐单查询），并做带 TTL 的本地缓存；缓存过期或接口不可用时按上条 fail-closed。是否引入 gRPC/流式接口留待触发条件出现后再评估，见 `.claude/standards/project-conventions.md` §2。
-- **待办（不阻塞 DEC-003，交给 RM1 前置）**：`market-info-service` 需为 NVDA、QQQ、BTC-USDT 三个 Instrument 采集并写入真实的 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity` 值，这是 RM2 回测撮合与 RM3 paper 下单可运行的前提。
+- **精度数据现状（2026-08-05，BE-004a 完成）**：NVDA/QQQ 的 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity` 已采集真实值（来源：长桥官方文档，`price_scale=2`、`quantity_scale=0`、`lot_size=1`、`min_quantity=1`）。**BTC-USDT 四个字段全部是占位值**（`market-info-service/deploy/postgres/init/002_core_catalog_seed.sql` 内有醒目 `PLACEHOLDER` 标注），尚未核实——本地网络与本仓库的沙箱环境当前均无法访问 Bybit API（判断为环境性/临时限制，非结构性区域屏蔽，详见 `01_decisions.md` DEC-003 附注），核实工作延后到需要真实调 Bybit 下单前（`paper`/`live`，即 `precision_mode=restricted`）再做；`research`/`backtest` 的 `unrestricted` 模式不读取这四个字段，不受此阻塞。
 
 ### 5.2 Portfolio
 

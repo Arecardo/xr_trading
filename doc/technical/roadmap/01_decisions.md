@@ -29,10 +29,11 @@
 ### DEC-003 定碎股与加密精度规则 — P0 — **DONE（2026-08-05）**
 - 依赖：DEC-001
 - 输出：
-  1. **碎股**：`research`/`backtest`/`paper` 内部按 `Decimal` 任意精度记录数量，不整股取整（首批组合仅约 2,500 美元，整股取整会让目标权重严重失真）。`live` 碎股下单能力需在 RM5 前核实长桥 Open API 支持情况，不支持则 fallback 为整股取整+现金留存。
+  1. **碎股（2026-08-05 修订）**：`research`/`backtest` 内部按 `Decimal` 任意精度记录数量，不整股取整（首批组合仅约 2,500 美元，整股取整会让目标权重严重失真）。`paper`/`live` 必须遵守 `Instrument` 目录里的真实 `lot_size`——BE-004a 采集到长桥官方规则「暂不支持碎股交易」后确认 `paper` 走长桥模拟盘 API 真实下单、与 `live` 同一套接口，不能自行放宽。原表述「`research`/`backtest`/`paper` 均不整股取整」已修正，详见需求文档 §5.1.1 修订说明；验证计划是等 BT-003/BT-006 落地后跑两轮回测（受限 vs 不受限）对比跟踪误差再决定后续应对。
   2. **精度规则不硬编码**：唯一来源是 `market-info-service` 的 `Instrument` 目录（`price_scale`/`quantity_scale`/`lot_size`/`min_quantity`），`backend` 通过 API 读取；数据缺失/过期时下单前 fail-closed，不用默认值兜底。
   3. **跨服务交互方式**：维持 HTTP JSON + 批量端点 + TTL 缓存，不引入 gRPC/protobuf；协议升级触发条件写入 `.claude/standards/project-conventions.md` §2（按具体高吞吐端点评估，不做全局切换）。
   - 详见需求文档 §5.1.1、`doc/technical/03_universe_data.md` §8。
+- **未决附注（2026-08-05）：BTC-USDT 精度数据待核实**。BE-004a 完成后 NVDA/QQQ 精度已是真实值，BTC-USDT 的 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity` 四项仍是占位值——本地网络与本仓库沙箱环境均连不上 Bybit API，判断为环境性/临时限制（非 Bybit 对该地区的结构性屏蔽，已与用户确认），暂不改变加密货币支持范围。**不阻塞 RM2**（`research`/`backtest` 用 `unrestricted` 精度模式，不读取这四个字段）；**RM3/RM5 前必须核实**（`paper`/`live` 用 `restricted` 模式，需要真实值），届时若仍连不上需重新评估是否为结构性限制。
 - 测试：下单数量/价格按规则取整后仍满足最小交易量与精度约束；目录数据缺失时下单请求应被拒绝而非静默使用默认值。
 - 完成条件：撮合与下单模块有明确的数量/精度规则可依。✅ 已满足（数值本身由 RM1 前置任务采集写入，见需求文档 §5.1.1 待办项）。
 

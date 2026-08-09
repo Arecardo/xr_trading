@@ -35,6 +35,7 @@ MVP 支持：
 - 交易成本配置。
 - 起始资金。
 - 各标的精度规则（`price_scale`/`quantity_scale`/`lot_size`/`min_quantity`），来源于 `market-info-service` 的 Instrument 目录，不得在回测引擎内硬编码（RM0 DEC-003）；缺失或过期时该标的当期 fail-closed，不生成撮合，需在回测报告中标记。
+- `precision_mode`（`unrestricted` | `restricted`，2026-08-05 补充）：`unrestricted` 时成交数量按 `Decimal` 任意精度记录，忽略目录 `lot_size`/`quantity_scale`；`restricted` 时按目录真实精度取整，模拟 `paper`/`live` 走长桥/Bybit 真实下单接口时的实际约束（长桥美股「暂不支持碎股交易」，`paper` 与 `live` 同一套下单接口，因此需要用 `restricted` 模式验证）。两种模式需能对同一输入分别跑通，用于对比碎股跟踪误差（见 `doc/technical/roadmap/03_backtest_engine.md` BT-003a）。
 
 ## 4. 回测配置示例
 
@@ -50,6 +51,7 @@ backtest:
   benchmarks: [QQQ, BTC-USD]
   valuation_timezone: UTC
   valuation_cutoff: "00:00"
+  precision_mode: unrestricted  # unrestricted | restricted，见 §3 输入说明
 ```
 
 ## 5. 事件驱动流程
@@ -77,7 +79,7 @@ MVP 可采用以下规则：
 - 买入：使用下一交易日开盘价或当日收盘价，加上滑点。
 - 卖出：使用下一交易日开盘价或当日收盘价，减去滑点。
 - 限价单：若价格区间触及限价，则视为成交；否则未成交。
-- 成交数量按 `Decimal` 精度记录，不做整股取整（RM0 DEC-003）；按标的的 `lot_size`/`quantity_scale` 取整到最小步长，取整后数量低于 `min_quantity` 时该笔交易不成交并记录原因。
+- 成交数量按 `Decimal` 精度记录；是否按标的 `lot_size`/`quantity_scale` 取整到最小步长由 `precision_mode` 决定（`unrestricted` 不取整，`restricted` 取整，见 §3、§4；2026-08-05 修订，理由见需求文档 §5.1.1）。`restricted` 模式下取整后数量低于 `min_quantity` 时该笔交易不成交并记录原因。
 
 具体规则必须写入回测报告，避免回测与实盘执行假设不一致。
 
