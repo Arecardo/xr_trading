@@ -21,9 +21,12 @@ Explicitly NOT this package's job:
   which deliberately does not accept `asset_code` alone; see
   `doc/technical/market_information_service/07_api_and_admin_ui.md` §2.2).
 
-Public surface for downstream consumers (BT-002):
+Public surface for downstream consumers (BT-002, BT-004+):
 ``AlignedBar``, ``AlignedSeries`` (data shape), ``HistoricalDataLoader``
-(orchestration), and the error hierarchy in ``errors``.
+(orchestration), the error hierarchy in ``errors``, and (BT-002)
+``IndicatorBar``/``compute_indicators`` plus the individual per-indicator
+functions in ``indicators`` for callers that want a single indicator rather
+than the full set.
 """
 
 from __future__ import annotations
@@ -32,6 +35,19 @@ from .errors import (
     BacktestDataError,
     MarketDataResponseError,
     MissingTradingDayBarError,
+)
+from .indicators import (
+    IndicatorBar,
+    MaTrend,
+    compute_atr,
+    compute_daily_returns,
+    compute_indicators,
+    compute_ma_trend,
+    compute_moving_average,
+    compute_price_position,
+    compute_relative_strength,
+    compute_rsi,
+    compute_volume_change,
 )
 from .loader import HistoricalDataLoader
 from .market_data_client import MarketInfoBarsClient
@@ -43,9 +59,20 @@ __all__ = [
     "AssetClass",
     "BacktestDataError",
     "HistoricalDataLoader",
+    "IndicatorBar",
     "MarketDataResponseError",
     "MarketInfoBarsClient",
+    "MaTrend",
     "MissingTradingDayBarError",
     "PriceStatus",
     "RawBar",
+    "compute_atr",
+    "compute_daily_returns",
+    "compute_indicators",
+    "compute_ma_trend",
+    "compute_moving_average",
+    "compute_price_position",
+    "compute_relative_strength",
+    "compute_rsi",
+    "compute_volume_change",
 ]
