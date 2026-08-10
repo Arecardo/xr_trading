@@ -88,23 +88,23 @@ class TestLoadPoolSettings:
 
 class TestSplitOptions:
     def test_extracts_options_and_strips_from_dsn(self) -> None:
-        dsn = "postgresql://user:pass@host:5432/db?options=-c%20role%3Dxr_core_runtime&sslmode=disable"
+        dsn = "postgresql://user:pass@localhost:5432/db?options=-c%20role%3Dxr_core_runtime&sslmode=disable"
         stripped, options = database._split_options(dsn)
         assert options == "-c role=xr_core_runtime"
         assert "options" not in stripped
         assert "sslmode=disable" in stripped
 
     def test_no_options_present(self) -> None:
-        dsn = "postgresql://user:pass@host:5432/db"
+        dsn = "postgresql://user:pass@localhost:5432/db"
         stripped, options = database._split_options(dsn)
         assert options is None
         assert stripped == dsn
 
     def test_only_options_present(self) -> None:
-        dsn = "postgresql://user:pass@host:5432/db?options=-c%20role%3Dxr_core_owner"
+        dsn = "postgresql://user:pass@localhost:5432/db?options=-c%20role%3Dxr_core_owner"
         stripped, options = database._split_options(dsn)
         assert options == "-c role=xr_core_owner"
-        assert stripped == "postgresql://user:pass@host:5432/db"
+        assert stripped == "postgresql://user:pass@localhost:5432/db"
 
 
 class TestBuildEngines:
