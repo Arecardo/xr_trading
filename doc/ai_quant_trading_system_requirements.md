@@ -151,7 +151,7 @@ User
 统一描述可研究和可交易的资产。核心字段包括：
 
 - `asset_id`：平台内部稳定 ID。
-- `asset_type`：`STOCK`、`ETF`、`CRYPTO`、`CASH`。
+- `asset_type`：`STOCK`、`ETF`、`CRYPTO`、`CASH`、`FX`（`FX` 为 2026-08-05 新增，见 §5.1.2）。
 - `symbol`：展示代码，如 `NVDA`、`BTC`。
 - `venue`：交易场所，如 `NASDAQ`、`NYSE`、`COINBASE`。
 - `quote_currency`：报价货币。
@@ -167,6 +167,15 @@ User
 - **精度规则来源**：`price_scale`、`quantity_scale`、`lot_size`、`min_quantity` 唯一真相来源是 `market-info-service` 的 `Instrument` 目录（见 `doc/technical/market_information_service/02_domain_model.md` §6.2），由行情服务从 Bybit/长桥采集并维护。`backend` 通过行情服务 API 读取，**不得在 Python 侧硬编码任何具体精度数值**（交易所规则会变，硬编码值会静默过期并引入资金风险）。目录中对应 Instrument 缺失或精度数据过期时，下单前必须 fail-closed（拒绝生成订单），不得使用猜测默认值兜底，与安全规范"缺关键凭据 fail-closed"同一原则。
 - **跨服务交互方式**：沿用现有 HTTP JSON API，不引入 gRPC/protobuf。`backend` 通过一个批量端点一次性查询多个 `instrument_id` 的精度字段（避免逐单查询），并做带 TTL 的本地缓存；缓存过期或接口不可用时按上条 fail-closed。是否引入 gRPC/流式接口留待触发条件出现后再评估，见 `.claude/standards/project-conventions.md` §2。
 - **精度数据现状（2026-08-05，BE-004a 完成）**：NVDA/QQQ 的 `price_scale`/`quantity_scale`/`lot_size`/`min_quantity` 已采集真实值（来源：长桥官方文档，`price_scale=2`、`quantity_scale=0`、`lot_size=1`、`min_quantity=1`）。**BTC-USDT 四个字段全部是占位值**（`market-info-service/deploy/postgres/init/002_core_catalog_seed.sql` 内有醒目 `PLACEHOLDER` 标注），尚未核实——本地网络与本仓库的沙箱环境当前均无法访问 Bybit API（判断为环境性/临时限制，非结构性区域屏蔽，详见 `01_decisions.md` DEC-003 附注），核实工作延后到需要真实调 Bybit 下单前（`paper`/`live`，即 `precision_mode=restricted`）再做；`research`/`backtest` 的 `unrestricted` 模式不读取这四个字段，不受此阻塞。
+
+#### 5.1.2 汇率数据来源（RM0 DEC-006 已决策，2026-08-05）
+
+- **来源**：非基础货币资产的折算汇率（当前只有 `BTC-USDT` 的计价货币 `USDT` → 基础货币 `USD`）建模为 `market-info-service` 目录里的一个 `FX` 类型 Instrument（`asset_id: fx:coingecko:usdt-usd`），复用其已有的采集/存储/质量检查/`/bars` 查询基础设施，新增 CoinGecko 作为 provider（公开稳定币历史价格接口，免费、无需密钥）。**不得硬编码 1:1 锚定假设**，即使 USDT 是稳定币，仍按真实采集到的每日汇率记账。
+- **历史 vs 实时**：回测需要历史区间每日汇率，不是一次性查当前值；CoinGecko 免费接口有速率限制，采集需节流/重试，不得在限流时静默丢数据或伪造延续值。
+- **OHLC 语义**：CoinGecko 免费接口返回逐日单一价格，非真实 OHLC；写入 `bars` 表时 `open=high=low=close=` 当日价格、`volume=0`，需在文档与数据中明确标注这不是真实市场 OHLC。
+- **采集范围规则的例外**：`FX` 类型 Instrument 不适用"采集范围由组合成员/持仓/基准驱动"的既有规则（§5.1.2 与 `03_universe_data.md` §7 的常规资产采集规则不同）——只要资产宇宙中存在非基础货币计价的持仓（如 `BTC-USDT`），对应汇率就必须持续采集；`FX` 类型 Instrument 本身不出现在任何组合的 `PortfolioMember` 候选/持有列表中。
+- **fail-closed**：`ValuationSnapshot` 生成时若对应日期的汇率缺失，不得产出伪精确净值，必须 fail-closed（与精度规则、行情数据缺失的处理原则一致）。
+- 落地任务：见 `doc/technical/implementation_plan/02_portfolio_and_market_integration.md` BE-003a。
 
 ### 5.2 Portfolio
 

@@ -55,6 +55,19 @@
 - 测试：不适用（决策）。
 - 完成条件：写入本目录与 python 后端规范；RM1 据此展开，避免核心弱于外围的漂移。✅ 已满足，详见 `.claude/standards/python-backend-standards.md` §3。
 
+### DEC-006 定汇率数据来源（USDT→USD）— P0（BE-003 前置）— **DONE（2026-08-05）**
+- 依赖：无（BE-002 落地过程中发现的缺口，补充决策）
+- 背景：需求文档、`03_universe_data.md` 均要求"非基础货币资产必须记录原币价值、汇率和折算后组合价值""汇率缺失时不得生成伪精确净值""不假设 1:1 硬编码锚定"，但此前从未定义汇率数据实际来源。组合内唯一非美元计价持仓是 `BTC-USDT`（计价 USDT），缺口具体为 USDT→USD。回测（BT-003）需要的是历史区间每日汇率，不是当前一个数字，不能只靠一次性调用免费实时接口了事。
+- 输出：**把 USDT/USD 建模为 `market-info-service` 目录里的一个 Instrument，复用其已有的采集/存储/质量检查/`/bars` 查询基础设施**（与 BTC-USDT 走同一套机制），新增 CoinGecko 作为 provider（公开稳定币历史价格接口，免费、无需密钥）。
+  - `asset_type` 枚举新增 `FX`（原 `STOCK`/`ETF`/`CRYPTO`/`CASH`），代表汇率参考数据，不是可持有/可交易标的，不出现在 `PortfolioMember` 候选/持有状态里。
+  - `Instrument.instrument_type` 枚举新增 `FX`（原 `EQUITY`/`ETF`/`SPOT`，`02_domain_model.md` 已预留"后续需要时再扩展其他类型"）。
+  - `asset_id` 沿用既有格式：`fx:coingecko:usdt-usd`。
+  - CoinGecko 免费接口返回的是逐日单一价格，不是真正 OHLC；纳入 `bars` 表时 `open=high=low=close=` 当日价格、`volume=0`，与 BT-001 对非交易日的"持平结转"处理方式一致，明确记录不是真实 OHLC。
+  - 采集范围不适用"由组合成员/持仓/基准驱动"的既有规则（`03_universe_data.md` §7）：FX 参考汇率的采集范围由"当前资产宇宙中出现的非基础货币计价币种"驱动，即只要 `BTC-USDT` 在候选/持有清单里，`USDT→USD` 就必须持续采集；未来如果所有持仓都已是美元计价，则不需要采集任何 FX 数据。
+- 落地任务：见 `doc/technical/implementation_plan/02_portfolio_and_market_integration.md` BE-003a（market-info-service 侧，BE-003 前置）。
+- 测试：CoinGecko 免费接口有速率限制，采集需要有节流/重试而不是被限流后静默丢数据；`FX` 类型 Instrument 不会被误纳入组合候选/持有流程。
+- 完成条件：BE-003 生成 `ValuationSnapshot` 时能查到 `USDT→USD` 的历史每日汇率，缺失时 fail-closed，不产出伪精确净值。
+
 ## 退出条件（RM0）
 
 DEC-001、002、003、005 全部产出书面结论并写回对应文档；DEC-004 可标记 `READY` 后延。**RM0 退出条件已满足（2026-08-05）**，可进入 RM1（后端地基）与 RM2（回测引擎）并行阶段。

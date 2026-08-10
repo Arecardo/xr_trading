@@ -34,7 +34,7 @@
 - 完成条件：领域层不泄漏驱动特有类型；金额字段用 decimal。
 
 ### BE-003 组合估值与快照模型 — P1
-- 依赖：BE-002、DEC-002
+- 依赖：BE-002、DEC-002、DEC-006（汇率数据来源）、BE-003a（行情服务 CoinGecko FX provider，见 implementation plan）
 - 输出：`Position`、`CashBalance`、`ValuationSnapshot`、`PerformanceSnapshot` 落地；支持原币值+汇率+基础货币折算；按 DEC-002 日切生成净值快照。
 - 测试：给定持仓/现金/汇率/价格，逐项对账净值；汇率缺失时不产出伪精确净值。
 - 完成条件：可生成组合当前配置、现金比例、净值。

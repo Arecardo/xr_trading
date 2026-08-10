@@ -55,17 +55,25 @@ POST /api/market-info/v1/instruments/precision:batch
 
 此任务修改 `market-info-service`（Go），与其余任务修改的 `backend`（Python）是不同目录，可独立并行、独立提交。
 
+## 1.1 BE-003a 行情服务新增 CoinGecko FX Provider（market-info-service 侧，BE-003 前置）
+
+| ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
+| --- | --- | --- | --- | --- |
+| BE-003a | READY | DEC-006（已决策） | 新增 CoinGecko provider（历史/当前稳定币价格，公开接口、无需密钥）；`Instrument.instrument_type` 枚举新增 `FX`；新增 Instrument `fx:coingecko:usdt-usd`（`asset_type=FX`，不进入任何组合的 `PortfolioMember`）；写入 `bars` 表时 `open=high=low=close=` 当日价格、`volume=0`，需在字段/文档中明确标注非真实 OHLC；采集调度不走"由组合成员驱动"的既有规则，改为常驻采集（只要资产宇宙存在非美元计价持仓就采集，与 DEC-006 一致） | CoinGecko 限流场景下不静默丢数据（节流/重试而非丢弃或伪造延续值）；`FX` 类型 Instrument 不会被现有"按组合成员生成采集计划"的逻辑误纳入或误排除；`/bars` 能查到 `usdt-usd` 的历史日度序列 |
+| **迁移策略提醒** | — | — | `Instrument.instrument_type` 枚举扩展需要一条新 migration（`CHECK` 约束或枚举类型），遵循 `project-conventions.md` §1"进入共享环境后只允许新增 migration，不得修改历史文件" | — |
+
 ## 2. BE-003 组合估值与快照模型
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-003 | TODO | BE-002、DEC-002 | `Position`、`CashBalance`、`ValuationSnapshot`、`PerformanceSnapshot` 落地；支持原币值 + 汇率 + 基础货币折算；按 DEC-002 日切规则（UTC 自然日、非交易日 `price_status: stale`）生成净值快照 | 给定持仓/现金/汇率/价格，逐项对账净值；汇率缺失时不产出伪精确净值；非交易日快照正确标记 `stale` 且不误报缺失 |
+| BE-003 | TODO | BE-002、DEC-002、BE-003a | `Position`、`CashBalance`、`ValuationSnapshot`、`PerformanceSnapshot` 落地；支持原币值 + 汇率（从 BE-003a 新增的 `fx:coingecko:usdt-usd` Instrument 查询）+ 基础货币折算；按 DEC-002 日切规则（UTC 自然日、非交易日 `price_status: stale`）生成净值快照 | 给定持仓/现金/汇率/价格，逐项对账净值；汇率缺失时不产出伪精确净值（fail-closed，不假设 1:1）；非交易日快照正确标记 `stale` 且不误报缺失 |
 
 ## 3. BE-004 行情服务集成契约（backend 客户端）
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-004 | TODO | BE-001、BE-004a | `adapters/market_data` 客户端（`httpx.AsyncClient`）调用行情服务的最新价/K 线/instrument/批量精度查询；采集资产范围由组合成员/持仓/基准驱动并同步给行情服务的订阅；批量精度查询结果做 TTL 本地缓存，过期或不可用时 fail-closed（拒绝下单，不用默认值兜底） | 契约测试（对 fake/录制响应）；采集范围随组合成员变化正确更新；缓存过期后强制刷新；行情服务不可达时下单请求被拒绝而非静默放行 |
+| BE-004 | DONE（2026-08-11） | BE-001、BE-004a | `adapters/market_data` 客户端（`httpx.AsyncClient`）：最新价/K 线/instrument/批量精度查询、`PrecisionCache`（TTL + fail-closed）、订阅同步（`compute_desired_instruments` + `sync_collection_subscriptions`，创建/重新启用/禁用，API 无 DELETE 故不删除行） | 契约测试（30 个，`httpx.MockTransport`）✅；精度缓存过期/不可用时 fail-closed（`PrecisionUnavailableError`，不返回旧值/默认值）✅；订阅同步正确 diff 三种状态 ✅ |
+| **BE-004 遗留待办（不阻塞已完成范围，交给下一个消费者处理）** | — | — | `asset_id`（如 `crypto:bybit:BTC-USDT`）→ 行情服务 `instrument_code`/`provider` 的解析没有任何地方实现——`AssetInstrumentResolver` 故意设计成一个 `Protocol`，由调用方注入具体实现，而不是猜一个映射公式。BE-003（或更早的某个小任务）落地时需要提供一个真正的实现（比如基于 `Asset.provider_symbols` + 查 `/instruments?asset_code=`，或者维护一张静态映射表） | — |
 
 ## 4. M2 退出门禁
 
@@ -73,3 +81,4 @@ POST /api/market-info/v1/instruments/precision:batch
 - 汇率或精度数据缺失时系统明确拒绝产出结果，不使用伪造默认值。
 - `backend` 与 `market-info-service` 之间只通过 HTTP API 交互，不共享数据库表（`project-conventions.md` §2）。
 - NVDA、QQQ、BTC-USDT 三个标的的精度规则可通过一次批量调用查询完整。
+- `USDT→USD` 历史汇率可通过 `/bars` 查询到完整的每日序列，覆盖回测所需的时间区间。

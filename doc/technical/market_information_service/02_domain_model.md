@@ -63,7 +63,7 @@ Asset 1 ────── N Instrument 1 ────── N ProviderInstrumen
 | `code` | 唯一可读编码，不作为外键 |
 | `asset_id` | 所属经济资产的 UUID 外键 |
 | `venue` | 交易场所，例如 `NASDAQ`、`BYBIT` |
-| `instrument_type` | `EQUITY`、`ETF`、`SPOT`；后续需要时再扩展其他类型 |
+| `instrument_type` | `EQUITY`、`ETF`、`SPOT`、`FX`（2026-08-05 新增，代表汇率参考数据，非可交易标的，详见需求文档 §5.1.2、RM0 DEC-006）；后续需要时再扩展其他类型 |
 | `symbol` | 场所层面的标准交易代码 |
 | `quote_asset_id` | 报价资产；加密现货示例为 USDT，可为空并使用 `quote_currency` |
 | `quote_currency` | 报价币种，例如 `USD`、`USDT` |
