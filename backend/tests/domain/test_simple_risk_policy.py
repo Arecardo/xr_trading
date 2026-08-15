@@ -406,12 +406,13 @@ def test_check_order_uses_the_crypto_default_cap_for_a_crypto_asset() -> None:
     assert result.context["max_single_asset_weight_post_trade.cap"] == str(Decimal("0.15"))
 
 
-def test_check_order_sell_reducing_exposure_still_hits_a_symmetric_weight_cap() -> None:
-    # The post-trade weight-cap check only looks at the *resulting* weight,
-    # not the direction of change -- a sell that still leaves the position
-    # above cap is a pre-existing condition, not one this order caused, but
-    # the check is symmetric by design and does not special-case that.
-    # Documented here so the behavior is explicit, not accidental.
+def test_check_order_sell_reducing_exposure_is_never_blocked_by_the_weight_cap() -> None:
+    # 2026-08-15 revision: a sell can only reduce this asset's own exposure,
+    # so it can never itself be the cause of a single-asset cap breach --
+    # even when the resulting weight is still above cap, that over-cap
+    # condition predates this order, and selling is the one action that
+    # moves the portfolio back toward compliance. A portfolio that is
+    # already over cap must still be able to sell its way back down.
     portfolio_id = uuid4()
     member = _member(portfolio_id, _NVDA)
     position = _position(portfolio_id, _NVDA, quantity="10", average_cost="90")
@@ -420,12 +421,12 @@ def test_check_order_sell_reducing_exposure_still_hits_a_symmetric_weight_cap() 
     )
     intent = _order(
         portfolio_id, _NVDA, "sell", "1", "100"
-    )  # post-trade 9*100/1000=90% still > cap
+    )  # post-trade 9*100/1000=90% still > cap, but this order reduces exposure
 
     result = _permissive_policy(max_single_equity_weight=Decimal("0.1")).check_order(intent, state)
 
-    assert result.approved is False
-    assert "max_single_asset_weight_post_trade" in result.checked_rules
+    assert result.approved is True
+    assert "max_single_asset_weight_post_trade" not in result.checked_rules
 
 
 # --- check_order: cash floor -------------------------------------------------

@@ -323,36 +323,43 @@ class SimpleRiskPolicy:
                 )
                 context["max_order_risk_pct_of_nav.net_asset_value"] = str(nav)
 
-        checked_rules.append("max_single_asset_weight_post_trade")
-        category = _asset_category(intent.asset_id)
-        cap = self._single_asset_cap(category, member)
-        if cap is not None:
-            if nav > _ZERO:
-                signed_delta = intent.quantity if intent.side == "buy" else -intent.quantity
-                post_trade_quantity = current_quantity + signed_delta
-                post_trade_value = (
-                    post_trade_quantity * intent.estimated_price
-                    if post_trade_quantity > _ZERO
-                    else _ZERO
-                )
-                post_trade_weight = post_trade_value / nav
-                if post_trade_weight > cap:
-                    reasons.append(
-                        f"post-trade weight for {intent.asset_id} would be "
-                        f"{post_trade_weight:.4%}, exceeds the single-asset cap of {cap:.4%}"
-                    )
-                    context["max_single_asset_weight_post_trade.post_trade_weight"] = str(
-                        post_trade_weight
-                    )
-                    context["max_single_asset_weight_post_trade.cap"] = str(cap)
-            else:
-                reasons.append(
-                    "portfolio net_asset_value is 0 or unknown; cannot evaluate the post-trade "
-                    "single-asset weight cap, fail-closed"
-                )
-                context["max_single_asset_weight_post_trade.net_asset_value"] = str(nav)
-
         if intent.side == "buy":
+            # Scoped to "buy" only (2026-08-15 revision): a sell strictly
+            # reduces this asset's own exposure, so it can never itself be
+            # the cause of a single-asset cap breach -- even when the
+            # resulting weight is still above cap, that over-cap condition
+            # predates this order and selling is the one action that moves
+            # the portfolio back toward compliance. Blocking it would trap
+            # an already-over-cap portfolio with no way to rebalance down.
+            # Only a buy can newly breach or worsen a breach of this cap.
+            checked_rules.append("max_single_asset_weight_post_trade")
+            category = _asset_category(intent.asset_id)
+            cap = self._single_asset_cap(category, member)
+            if cap is not None:
+                if nav > _ZERO:
+                    post_trade_quantity = current_quantity + intent.quantity
+                    post_trade_value = (
+                        post_trade_quantity * intent.estimated_price
+                        if post_trade_quantity > _ZERO
+                        else _ZERO
+                    )
+                    post_trade_weight = post_trade_value / nav
+                    if post_trade_weight > cap:
+                        reasons.append(
+                            f"post-trade weight for {intent.asset_id} would be "
+                            f"{post_trade_weight:.4%}, exceeds the single-asset cap of {cap:.4%}"
+                        )
+                        context["max_single_asset_weight_post_trade.post_trade_weight"] = str(
+                            post_trade_weight
+                        )
+                        context["max_single_asset_weight_post_trade.cap"] = str(cap)
+                else:
+                    reasons.append(
+                        "portfolio net_asset_value is 0 or unknown; cannot evaluate the "
+                        "post-trade single-asset weight cap, fail-closed"
+                    )
+                    context["max_single_asset_weight_post_trade.net_asset_value"] = str(nav)
+
             checked_rules.append("cash_floor_post_trade")
             current_cash = portfolio_state.latest_snapshot.cash_value
             if nav > _ZERO:
