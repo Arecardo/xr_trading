@@ -76,9 +76,11 @@ M1 与 M2' 在 M0 冻结后即可并行；M2 依赖 M1（复用同一批 reposit
 | BE-002、BT-001 | DONE（2026-08-05） | 详见 `01_contracts_and_foundation.md`、`03_backtest_data_and_indicators.md`；BE-002 提出的 3 个契约问题已由整合负责人裁定（`broker_code` 参数已修正并重新测试通过，另两个确认无需改动），BT-001 的美股节假日日历不含临时性闭市 |
 | DEC-006（汇率数据来源） | DONE（2026-08-05） | BE-002 落地过程中发现汇率数据源从未定义，补充决策：建模为 market-info-service 的 `FX` 类型 Instrument，新增 CoinGecko provider；详见 `roadmap/01_decisions.md` DEC-006、需求文档 §5.1.2 |
 | BE-004、BT-002 | DONE（2026-08-11） | 详见 `02_portfolio_and_market_integration.md`、`03_backtest_data_and_indicators.md`；BE-004 留了一个明确的遗留待办（`asset_id`→`instrument_code` 解析器，故意做成待注入的 Protocol，未擅自猜映射规则） |
-| BE-003a | READY | 依赖的 DEC-006 已决策，尚未派发 |
-| BE-003 | TODO | 依赖 BE-003a（尚未开工），BE-003a 完成后转 READY |
-| 其余任务（BT-003~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
+| BE-003a | IN_PROGRESS | market-info-service 侧接入 CoinGecko FX provider，进行中 |
+| BT-004 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRuleStrategy` 落地，留了 4 条遗留待办（domain→backtest 依赖、`trading_status` 填充责任、`candidate` 状态是否该买入、默认阈值均为判断非钉死值） |
+| BE-003 | TODO | 依赖 BE-003a（进行中），完成后转 READY |
+| BT-005 | READY | 依赖的 BT-004、CONTRACT-003 均已就绪 |
+| 其余任务（BT-003、BT-006~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
 
 ## 7. 首期明确不做
 

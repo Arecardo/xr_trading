@@ -7,7 +7,8 @@
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BT-004 | TODO | BT-002、CONTRACT-002 | 按冻结签名实现 `Strategy` 接口；实现一条简单规则策略（如分资产类型加权评分 + 阈值决策），输入分析结果 + 组合状态，输出资产评分/目标权重/调仓建议，不直接下单 | 权重和不为 1 拒绝运行；`restricted`/`blacklist` 不生成买入；缺技术指标不生成买入；策略接口可被回测与 paper 共用（同一签名，无需按环境改代码） |
+| BT-004 | DONE（2026-08-15） | BT-002、CONTRACT-002 | `SimpleRuleStrategy`（`backend/domain/strategies/simple_rule_strategy.py`）：6 项打分因子（MA5/20 方向、收盘价 vs MA20/50、RSI 超买、20 日新低、相对基准强弱），阈值 ±2 分买卖决策；`AnalysisResult` 从 BE-001 的占位改为 BT-002 `IndicatorBar` 的真实包装 | 权重和恰为 1（现金兜底残差 + 运行时校验）✅；`restricted`/`blacklist` 只能维持或降低权重 ✅；指标不足维持现状不新增买入 ✅；纯函数无副作用（重复调用结果一致）✅；20 个单测 |
+| **BT-004 遗留待办** | — | — | 1) `domain.strategies` 依赖 `backend.backtest.IndicatorBar`，架构上 domain 依赖了回测引擎包，等 paper/live 分析管线建好后应把 `IndicatorBar` 挪到中立位置；2) `AnalysisResult` 里 `trading_status` 字段目前没有任何地方真正填充（谁组装 `AnalysisResult` 就得自己去 join `Asset.trading_status`）；3) `candidate` 状态的成员目前和 `approved`/`held` 一样可以被买入，如果只想让 `approved`/`held` 触发买入信号需要额外决策；4) 默认单资产权重上限 20%、20 日窗口、±2 分阈值都是本任务的判断，非文档钉死的值 | — |
 
 ## 2. BT-005 风控接口（回测复用）
 
