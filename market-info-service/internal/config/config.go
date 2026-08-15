@@ -59,6 +59,7 @@ type Config struct {
 	AdminSubject            string
 	EnabledProviders        []string
 	BybitBaseURL            string
+	CoinGeckoBaseURL        string
 	WorkerID                string
 	WorkerConcurrency       int
 	WorkerLeaseDuration     time.Duration
@@ -109,6 +110,7 @@ func LoadFromForMode(lookup LookupEnv, mode RuntimeMode) (Config, error) {
 		AdminBearerToken:        valueOrDefault(lookup, "MARKET_INFO_ADMIN_BEARER_TOKEN", ""),
 		AdminSubject:            valueOrDefault(lookup, "MARKET_INFO_ADMIN_SUBJECT", defaultAdminSubject),
 		BybitBaseURL:            valueOrDefault(lookup, "BYBIT_BASE_URL", ""),
+		CoinGeckoBaseURL:        valueOrDefault(lookup, "COINGECKO_BASE_URL", ""),
 		WorkerID:                valueOrDefault(lookup, "MARKET_INFO_WORKER_ID", ""),
 		WorkerConcurrency:       defaultWorkerConcurrency,
 		WorkerLeaseDuration:     defaultWorkerLease,
@@ -284,8 +286,8 @@ func parseEnabledProviders(value string) ([]string, error) {
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
 		provider := strings.TrimSpace(part)
-		if provider != part || (provider != "bybit" && provider != "longbridge") {
-			return nil, errors.New("MARKET_INFO_ENABLED_PROVIDERS accepts only comma-separated bybit and longbridge")
+		if provider != part || (provider != "bybit" && provider != "longbridge" && provider != "coingecko") {
+			return nil, errors.New("MARKET_INFO_ENABLED_PROVIDERS accepts only comma-separated bybit, longbridge and coingecko")
 		}
 		if _, exists := seen[provider]; exists {
 			return nil, errors.New("MARKET_INFO_ENABLED_PROVIDERS must not contain duplicates")

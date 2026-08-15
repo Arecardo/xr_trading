@@ -29,6 +29,7 @@ import (
 	"xr-trading/market-info-service/internal/observability"
 	"xr-trading/market-info-service/internal/providers"
 	"xr-trading/market-info-service/internal/providers/bybit"
+	"xr-trading/market-info-service/internal/providers/coingecko"
 	"xr-trading/market-info-service/internal/providers/longbridge"
 	repositorypostgres "xr-trading/market-info-service/internal/repository/postgres"
 	"xr-trading/market-info-service/internal/scheduler"
@@ -376,6 +377,13 @@ func buildAdapterRegistry(ctx context.Context, cfg config.Config, usCalendar mar
 			if err != nil {
 				_ = closeAll()
 				return nil, nil, fmt.Errorf("create Bybit adapter: %w", err)
+			}
+			adapters = append(adapters, adapter)
+		case "coingecko":
+			adapter, err := coingecko.New(coingecko.Config{BaseURL: cfg.CoinGeckoBaseURL})
+			if err != nil {
+				_ = closeAll()
+				return nil, nil, fmt.Errorf("create CoinGecko adapter: %w", err)
 			}
 			adapters = append(adapters, adapter)
 		case "longbridge":

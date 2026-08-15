@@ -190,6 +190,12 @@ func providerScopeFor(observation ProviderSubscriptionObservation) (providerScop
 	switch observation.AssetType {
 	case domain.AssetTypeCrypto:
 		return providerScopeKey{market: "crypto_" + observation.ProviderMarket, sessionType: "continuous", interval: observation.Interval}, nil
+	case domain.AssetTypeFX:
+		// FX reference-rate subscriptions (RM0 DEC-006) run on the same
+		// continuous 7x24 UTC axis as crypto spot; without this case a live
+		// CoinGecko subscription would make every /provider-status call fail
+		// with domain.ErrInvalidData for every provider, not only CoinGecko.
+		return providerScopeKey{market: "fx_" + observation.ProviderMarket, sessionType: "continuous", interval: observation.Interval}, nil
 	case domain.AssetTypeStock, domain.AssetTypeETF:
 		return providerScopeKey{market: observation.ProviderMarket + "_equity", sessionType: "regular", interval: observation.Interval}, nil
 	default:

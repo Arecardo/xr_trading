@@ -242,13 +242,13 @@ func TestBuildAdapterRegistry(t *testing.T) {
 		t.Fatalf("NewNYSECalendar() error = %v", err)
 	}
 	registry, closeAdapters, err := buildAdapterRegistry(context.Background(), config.Config{
-		EnabledProviders: []string{"bybit"},
+		EnabledProviders: []string{"bybit", "coingecko"},
 	}, calendar)
 	if err != nil {
 		t.Fatalf("buildAdapterRegistry() error = %v", err)
 	}
 	adapters := registry.List()
-	if len(adapters) != 1 || adapters[0].ProviderCode().String() != "bybit" {
+	if len(adapters) != 2 || adapters[0].ProviderCode().String() != "bybit" || adapters[1].ProviderCode().String() != "coingecko" {
 		t.Fatalf("registered adapters = %#v", adapters)
 	}
 	if err := closeAdapters(); err != nil {
@@ -260,6 +260,12 @@ func TestBuildAdapterRegistry(t *testing.T) {
 		BybitBaseURL:     "not-a-url",
 	}, calendar); err == nil || !strings.Contains(err.Error(), "create Bybit adapter") {
 		t.Fatalf("buildAdapterRegistry(invalid URL) error = %v", err)
+	}
+	if _, _, err := buildAdapterRegistry(context.Background(), config.Config{
+		EnabledProviders: []string{"coingecko"},
+		CoinGeckoBaseURL: "not-a-url",
+	}, calendar); err == nil || !strings.Contains(err.Error(), "create CoinGecko adapter") {
+		t.Fatalf("buildAdapterRegistry(invalid CoinGecko URL) error = %v", err)
 	}
 	if _, _, err := buildAdapterRegistry(context.Background(), config.Config{
 		EnabledProviders: []string{"unsupported"},

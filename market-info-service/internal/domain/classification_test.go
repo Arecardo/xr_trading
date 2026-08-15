@@ -15,7 +15,7 @@ func TestClassificationParsers(t *testing.T) {
 	if _, err := ParseBarInterval("5m"); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("ParseBarInterval(5m) error = %v", err)
 	}
-	for _, value := range []string{"STOCK", "ETF", "CRYPTO", "CASH"} {
+	for _, value := range []string{"STOCK", "ETF", "CRYPTO", "CASH", "FX"} {
 		if _, err := ParseAssetType(value); err != nil {
 			t.Fatalf("ParseAssetType(%q) error = %v", value, err)
 		}
@@ -23,7 +23,7 @@ func TestClassificationParsers(t *testing.T) {
 	if _, err := ParseAssetType("crypto"); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("ParseAssetType(crypto) error = %v", err)
 	}
-	for _, value := range []string{"EQUITY", "ETF", "SPOT"} {
+	for _, value := range []string{"EQUITY", "ETF", "SPOT", "FX"} {
 		if _, err := ParseInstrumentType(value); err != nil {
 			t.Fatalf("ParseInstrumentType(%q) error = %v", value, err)
 		}

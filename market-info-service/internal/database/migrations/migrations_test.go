@@ -130,6 +130,35 @@ func TestRuntimeGrantMigrationUsesDedicatedRolesAndNoDeletePrivilege(t *testing.
 	}
 }
 
+func TestCoinGeckoFXSeedMigrationContainsExpectedObjects(t *testing.T) {
+	t.Parallel()
+
+	migrationFS, err := Files()
+	if err != nil {
+		t.Fatalf("Files() error = %v", err)
+	}
+	contents, err := fs.ReadFile(migrationFS, "00007_seed_coingecko_fx_provider.sql")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"market_data.providers", "'coingecko'", "market_data.provider_instruments",
+		"market_data.collection_subscriptions", "'1d'", "enabled",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("migration does not contain %q", expected)
+		}
+	}
+	// Unlike every other seeded collection_subscriptions row, this one must
+	// ship already enabled: FX collection scope is driven by "does the asset
+	// universe contain a non-base-currency holding", not by a
+	// backend-initiated subscription-sync call (RM0 DEC-006).
+	if !strings.Contains(text, "true, 100, 300, NULL") {
+		t.Fatalf("coingecko subscription is not seeded already-enabled: %s", text)
+	}
+}
+
 func TestPrepareSchema(t *testing.T) {
 	t.Parallel()
 

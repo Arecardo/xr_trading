@@ -17,6 +17,7 @@ func TestSCH003ConcurrentSchedulersCreateOneStableRunAndTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	fixture := newING004Fixture(t, ctx, "sch003", 5)
+	withCoinGeckoFXSubscriptionDisabled(t, ctx, fixture.admin)
 	if _, err := fixture.admin.Exec(ctx, "DELETE FROM market_data.ingestion_tasks WHERE run_id = $1", fixture.run.ID.UUID()); err != nil {
 		t.Fatalf("delete setup task: %v", err)
 	}

@@ -1,4 +1,4 @@
-.PHONY: security-check fmt fmt-check tidy-check vet test test-race test-adapters test-integration test-integration-existing smoke-bybit smoke-longbridge coverage build check db-start db-stop migrate-up
+.PHONY: security-check fmt fmt-check tidy-check vet test test-race test-adapters test-integration test-integration-existing smoke-bybit smoke-longbridge smoke-coingecko coverage build check db-start db-stop migrate-up
 
 COVERAGE_MIN ?= 80.0
 COVERAGE_FILE ?= coverage.out
@@ -64,6 +64,13 @@ smoke-longbridge:
 		exit 1; \
 	}
 	go test -count=1 -tags=smoke ./internal/providers/longbridge -run TestSmokeMarketData
+
+smoke-coingecko:
+	@test "$(COINGECKO_SMOKE)" = "1" || { \
+		echo "set COINGECKO_SMOKE=1 to acknowledge a real CoinGecko network request" >&2; \
+		exit 1; \
+	}
+	go test -count=1 -tags=smoke ./internal/providers/coingecko -run TestSmokePublicMarketData
 
 coverage:
 	go test ./... -covermode=atomic -coverprofile=$(COVERAGE_FILE)

@@ -16,6 +16,7 @@ func TestSCH004RecoversExpiredLeaseAndCreatesOnlyActualGap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	fixture := newING004Fixture(t, ctx, "sch004", 5)
+	withCoinGeckoFXSubscriptionDisabled(t, ctx, fixture.admin)
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
 		_, _ = fixture.admin.Exec(cleanupCtx, "DELETE FROM market_data.ingestion_tasks WHERE subscription_id = $1", fixture.subscription.ID.UUID())

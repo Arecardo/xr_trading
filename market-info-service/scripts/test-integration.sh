@@ -51,12 +51,21 @@ HOST_PORT="${HOST_ENDPOINT##*:}"
 [[ "$HOST_PORT" =~ ^[0-9]+$ ]] || { printf 'cannot determine PostgreSQL host port from %s\n' "$HOST_ENDPOINT" >&2; exit 1; }
 
 compose exec -T postgres createdb --username "$POSTGRES_USER" --template template0 "$TEST_DB"
-compose exec -T postgres psql \
-  --username "$POSTGRES_USER" \
-  --dbname "$TEST_DB" \
-  --set ON_ERROR_STOP=1 \
-  <"$SERVICE_DIR/deploy/postgres/init/001_roles_and_core.sql" \
-  >/dev/null
+# Apply every deploy/postgres/init/*.sql script in lexicographic order, the
+# same order docker-entrypoint-initdb.d would use on a truly fresh container.
+# This must not hardcode just 001: 002 (core catalog seed), 003/004 (FX asset
+# type + seed, BE-003a) and any later-numbered init script all seed rows that
+# later goose migrations' hardcoded-ID INSERTs depend on via foreign key (see
+# 00006_seed_provider_catalog.sql and 00007_seed_coingecko_fx_provider.sql).
+for init_file in "$SERVICE_DIR"/deploy/postgres/init/*.sql; do
+  printf 'applying core bootstrap script %s\n' "$(basename "$init_file")"
+  compose exec -T postgres psql \
+    --username "$POSTGRES_USER" \
+    --dbname "$TEST_DB" \
+    --set ON_ERROR_STOP=1 \
+    <"$init_file" \
+    >/dev/null
+done
 
 ADMIN_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$HOST_PORT/$TEST_DB?sslmode=disable"
 MIGRATION_URL="$ADMIN_URL&options=-c%20role%3Dxr_market_data_owner"

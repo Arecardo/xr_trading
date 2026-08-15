@@ -24,6 +24,7 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"MARKET_INFO_ADMIN_SUBJECT",
 		"MARKET_INFO_ENABLED_PROVIDERS",
 		"BYBIT_BASE_URL",
+		"COINGECKO_BASE_URL",
 		"MARKET_INFO_WORKER_ID",
 		"MARKET_INFO_WORKER_CONCURRENCY",
 		"MARKET_INFO_WORKER_LEASE_DURATION",
@@ -56,7 +57,7 @@ func TestLoadFromForWorkerDoesNotRequireAdminCredential(t *testing.T) {
 
 	values := map[string]string{
 		"MARKET_INFO_DATABASE_URL":               "postgres://user:pass@localhost:5432/db",
-		"MARKET_INFO_ENABLED_PROVIDERS":          "longbridge,bybit",
+		"MARKET_INFO_ENABLED_PROVIDERS":          "longbridge,bybit,coingecko",
 		"MARKET_INFO_WORKER_ID":                  "worker-a",
 		"MARKET_INFO_WORKER_CONCURRENCY":         "6",
 		"MARKET_INFO_WORKER_LEASE_DURATION":      "20m",
@@ -66,6 +67,7 @@ func TestLoadFromForWorkerDoesNotRequireAdminCredential(t *testing.T) {
 		"MARKET_INFO_INGESTION_MAXIMUM_PAGES":    "30",
 		"MARKET_INFO_SCHEDULER_INTERVAL":         "2m",
 		"BYBIT_BASE_URL":                         "https://example.com",
+		"COINGECKO_BASE_URL":                     "https://example.com",
 	}
 	cfg, err := LoadFromForMode(func(key string) (string, bool) {
 		value, ok := values[key]
@@ -74,9 +76,10 @@ func TestLoadFromForWorkerDoesNotRequireAdminCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromForMode() error = %v", err)
 	}
-	if cfg.AdminBearerToken != "" || strings.Join(cfg.EnabledProviders, ",") != "bybit,longbridge" ||
+	if cfg.AdminBearerToken != "" || strings.Join(cfg.EnabledProviders, ",") != "bybit,coingecko,longbridge" ||
 		cfg.WorkerConcurrency != 6 || cfg.WorkerLeaseDuration != 20*time.Minute ||
-		cfg.IngestionBarsPerPage != 750 || cfg.SchedulerInterval != 2*time.Minute {
+		cfg.IngestionBarsPerPage != 750 || cfg.SchedulerInterval != 2*time.Minute ||
+		cfg.CoinGeckoBaseURL != "https://example.com" {
 		t.Fatalf("unexpected worker config: %+v", cfg)
 	}
 }

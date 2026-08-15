@@ -100,6 +100,33 @@ func TestIncrementalSchedulerPagesMarketsAndHonorsActivationBoundary(t *testing.
 	}
 }
 
+func TestIncrementalSchedulerSchedulesFXOnTheContinuousAxis(t *testing.T) {
+	now := mustTime(t, "2026-07-06T14:32:00Z")
+	// updatedAt (the subscription activation boundary) must be well before the
+	// most recently closed daily bar, or the scheduler correctly treats that
+	// bar as pre-dating activation and schedules nothing yet.
+	fx := schedulingTargetFixture(t, "019f1452-90f7-7992-a87a-ca2727891601", domain.AssetTypeFX, domain.InstrumentTypeFX, "fx", now.Add(-48*time.Hour))
+	fx.Subscription.Interval = "1d"
+	store := &incrementalStoreStub{targets: []SchedulingTarget{fx}, batches: make(map[string]ScheduledBatch)}
+	scheduler, err := NewIncrementalScheduler(IncrementalConfig{}, store, fixedClock{now: now}, domain.NewID, testNYSECalendar(t))
+	if err != nil {
+		t.Fatalf("NewIncrementalScheduler() error = %v", err)
+	}
+	// FX must schedule exactly like crypto spot (7x24 UTC axis, no trading
+	// calendar gate) rather than erroring out as an unrecognized market, since
+	// an unrecognized market aborts the entire scheduler scan for every
+	// subscription, not only the FX one.
+	result, err := scheduler.RunOnce(context.Background())
+	if err != nil || result.ScannedSubscriptions != 1 || result.DueWindows == 0 || result.CreatedRuns == 0 {
+		t.Fatalf("RunOnce() = (%#v, %v)", result, err)
+	}
+	for _, batch := range store.batches {
+		if err := batch.Validate(); err != nil {
+			t.Fatalf("batch.Validate() error = %v", err)
+		}
+	}
+}
+
 func TestLatestWindowCalculators(t *testing.T) {
 	continuous, err := CalculateLatestContinuousWindow(domain.BarInterval1Day, WindowTriggerClose, mustTime(t, "2026-07-18T00:02:00Z"), 2*time.Minute)
 	if err != nil || continuous == nil || continuous.RangeStart != mustTime(t, "2026-07-17T00:00:00Z") || continuous.RangeEnd != mustTime(t, "2026-07-18T00:00:00Z") {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	poolpostgres "xr-trading/market-info-service/internal/database/postgres"
@@ -253,6 +254,56 @@ func newING004Fixture(t *testing.T, ctx context.Context, suffix string, maxAttem
 		cleanupING002Fixture(t, context.Background(), admin, run.ID, subscription.ID, providerID, mapping.ID, instrumentID, assetID)
 	})
 	return ing004Fixture{admin: admin, store: store, provider: provider, mapping: mapping, subscription: subscription, run: run, task: task, now: now}
+}
+
+// withCoinGeckoFXSubscriptionDisabled temporarily disables the always-on
+// fx:coingecko:usdt-usd collection_subscription seeded by
+// 00007_seed_coingecko_fx_provider.sql (RM0 DEC-006) for the duration of one
+// test, restoring its prior enabled state on cleanup. Scheduler tests that
+// assert an exact ScannedSubscriptions/DueWindows count against the whole
+// shared integration database would otherwise see that always-on row too,
+// since real ListSchedulingTargets scans is not scoped to one fixture.
+func withCoinGeckoFXSubscriptionDisabled(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT subscriptions.id, subscriptions.enabled
+FROM market_data.collection_subscriptions AS subscriptions
+JOIN market_data.provider_instruments AS provider_instruments ON provider_instruments.id = subscriptions.provider_instrument_id
+JOIN market_data.providers AS providers ON providers.id = provider_instruments.provider_id
+WHERE providers.code = 'coingecko'`)
+	if err != nil {
+		t.Fatalf("query coingecko subscriptions: %v", err)
+	}
+	type priorState struct {
+		id      domain.ID
+		enabled bool
+	}
+	var prior []priorState
+	for rows.Next() {
+		var id uuid.UUID
+		var enabled bool
+		if err := rows.Scan(&id, &enabled); err != nil {
+			rows.Close()
+			t.Fatalf("scan coingecko subscription: %v", err)
+		}
+		prior = append(prior, priorState{id: domain.IDFromUUID(id), enabled: enabled})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate coingecko subscriptions: %v", err)
+	}
+	rows.Close()
+	for _, state := range prior {
+		if _, err := admin.Exec(ctx, "UPDATE market_data.collection_subscriptions SET enabled = false WHERE id = $1", state.id.UUID()); err != nil {
+			t.Fatalf("disable coingecko subscription %s: %v", state.id, err)
+		}
+	}
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		for _, state := range prior {
+			if _, err := admin.Exec(cleanupCtx, "UPDATE market_data.collection_subscriptions SET enabled = $2 WHERE id = $1", state.id.UUID(), state.enabled); err != nil {
+				t.Errorf("restore coingecko subscription %s: %v", state.id, err)
+			}
+		}
+	})
 }
 
 func assertING004NoMarketWrites(t *testing.T, ctx context.Context, fixture ing004Fixture) {

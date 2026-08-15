@@ -30,7 +30,7 @@ func TestAdapterFixturesAreValidAndSanitized(t *testing.T) {
 	t.Parallel()
 
 	fixtureCount := 0
-	for _, root := range []string{"bybit/testdata", "longbridge/testdata"} {
+	for _, root := range []string{"bybit/testdata", "longbridge/testdata", "coingecko/testdata"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr

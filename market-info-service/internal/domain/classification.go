@@ -21,6 +21,13 @@ const (
 	AssetTypeETF    AssetType = "ETF"
 	AssetTypeCrypto AssetType = "CRYPTO"
 	AssetTypeCash   AssetType = "CASH"
+	// AssetTypeFX represents an FX reference rate asset (2026-08-05, RM0
+	// DEC-006). It is never a tradable/holdable PortfolioMember candidate; it
+	// exists only so a non-base-currency holding's quote currency can be
+	// converted through market-info-service's normal catalog/collection
+	// machinery. See doc/technical/03_universe_data.md §7 for the collection
+	// scope exception this asset type carries.
+	AssetTypeFX AssetType = "FX"
 )
 
 // InstrumentType classifies a venue-specific instrument.
@@ -30,6 +37,10 @@ const (
 	InstrumentTypeEquity InstrumentType = "EQUITY"
 	InstrumentTypeETF    InstrumentType = "ETF"
 	InstrumentTypeSpot   InstrumentType = "SPOT"
+	// InstrumentTypeFX mirrors AssetTypeFX at the Instrument level: a
+	// non-tradable FX reference rate quoted by a specific provider (currently
+	// only CoinGecko). See AssetTypeFX.
+	InstrumentTypeFX InstrumentType = "FX"
 )
 
 // ParseBarInterval validates a stored K-line interval.
@@ -45,7 +56,7 @@ func ParseBarInterval(value string) (BarInterval, error) {
 func ParseAssetType(value string) (AssetType, error) {
 	parsed := AssetType(value)
 	switch parsed {
-	case AssetTypeStock, AssetTypeETF, AssetTypeCrypto, AssetTypeCash:
+	case AssetTypeStock, AssetTypeETF, AssetTypeCrypto, AssetTypeCash, AssetTypeFX:
 		return parsed, nil
 	default:
 		return "", fmt.Errorf("parse asset type: %w", ErrInvalidData)
@@ -56,7 +67,7 @@ func ParseAssetType(value string) (AssetType, error) {
 func ParseInstrumentType(value string) (InstrumentType, error) {
 	parsed := InstrumentType(value)
 	switch parsed {
-	case InstrumentTypeEquity, InstrumentTypeETF, InstrumentTypeSpot:
+	case InstrumentTypeEquity, InstrumentTypeETF, InstrumentTypeSpot, InstrumentTypeFX:
 		return parsed, nil
 	default:
 		return "", fmt.Errorf("parse instrument type: %w", ErrInvalidData)

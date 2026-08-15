@@ -29,7 +29,7 @@ Asset 1 ────── N Instrument 1 ────── N ProviderInstrumen
 | --- | --- |
 | `id` | UUIDv7，不可变内部主键 |
 | `code` | 唯一可读编码，不作为外键 |
-| `asset_type` | `STOCK`、`ETF`、`CRYPTO`、`CASH` |
+| `asset_type` | `STOCK`、`ETF`、`CRYPTO`、`CASH`、`FX`（2026-08-05 新增，代表汇率参考数据，非可持有/可交易资产，不出现在任何组合的 `PortfolioMember` 候选/持有列表中，详见需求文档 §5.1.2、RM0 DEC-006） |
 | `canonical_symbol` | 面向展示和搜索的通用代码，例如 `NVDA`、`BTC` |
 | `name` | 资产名称 |
 | `status` | `active`、`inactive`、`delisted` |

@@ -186,6 +186,28 @@ func TestCatalogRelationshipValidation(t *testing.T) {
 	}
 }
 
+func TestCatalogRelationshipValidationAcceptsFXAssetAndInstrument(t *testing.T) {
+	now := time.Now().UTC()
+	asset := validAsset(t, now)
+	asset.AssetType = AssetTypeFX
+	asset.Code = testDomainCode(t, "asset.fx.usdt-usd")
+	asset.CanonicalSymbol = "USDT-USD"
+	instrument := validInstrument(t, asset.ID, now)
+	instrument.InstrumentType = InstrumentTypeFX
+	instrument.Code = testDomainCode(t, "instrument.coingecko.fx.usdt-usd")
+	instrument.Venue = "COINGECKO"
+	instrument.Symbol = "USDT-USD"
+	instrument.QuoteCurrency = "USD"
+	if err := ValidateAssetInstrument(asset, instrument); err != nil {
+		t.Fatalf("ValidateAssetInstrument(FX) error = %v", err)
+	}
+
+	instrument.InstrumentType = InstrumentTypeSpot
+	if err := ValidateAssetInstrument(asset, instrument); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("ValidateAssetInstrument(FX asset, SPOT instrument) error = %v", err)
+	}
+}
+
 func TestCatalogEnumsJSON(t *testing.T) {
 	values := []struct {
 		value any

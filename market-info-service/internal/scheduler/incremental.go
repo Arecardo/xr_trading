@@ -326,6 +326,13 @@ func schedulingMarket(target SchedulingTarget) (string, error) {
 	if target.AssetType == domain.AssetTypeCrypto && target.InstrumentType == domain.InstrumentTypeSpot {
 		return "continuous", nil
 	}
+	// FX reference rates (RM0 DEC-006) are collected on the same 7x24 UTC axis
+	// as crypto spot: they are not gated by any single market's trading
+	// calendar and must stay available whenever a non-base-currency holding
+	// exists in the asset universe (doc/technical/03_universe_data.md §7).
+	if target.AssetType == domain.AssetTypeFX && target.InstrumentType == domain.InstrumentTypeFX {
+		return "continuous", nil
+	}
 	if target.ProviderMarket == "us" && ((target.AssetType == domain.AssetTypeStock && target.InstrumentType == domain.InstrumentTypeEquity) ||
 		(target.AssetType == domain.AssetTypeETF && target.InstrumentType == domain.InstrumentTypeETF)) {
 		return "us_regular", nil

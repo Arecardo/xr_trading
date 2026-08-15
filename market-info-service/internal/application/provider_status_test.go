@@ -107,6 +107,34 @@ func TestProviderStatusServiceMarksCalendarRangeAsUnhealthy(t *testing.T) {
 	}
 }
 
+func TestProviderStatusServiceProjectsFXAsContinuousScope(t *testing.T) {
+	checkedAt := providerStatusTime(t, "2026-07-06T14:40:00Z")
+	fresh := providerStatusTime(t, "2026-07-06T14:00:00Z")
+	source := providerStatusSource("coingecko", domain.ProviderStatusActive, ProviderSubscriptionObservation{
+		SubscriptionID: providerStatusID("019f1452-90f7-7992-a87a-ca2727898461"), ProviderMarket: "fx",
+		AssetType: domain.AssetTypeFX, Interval: domain.BarInterval1Day, CloseDelaySeconds: 120,
+		LastClosedOpenTime: &fresh, LastSuccessAt: &fresh,
+	})
+	calendar, _ := markettime.NewNYSECalendar()
+	// This exercises the exact regression risk documented on providerScopeFor:
+	// an unrecognized AssetType previously made List() fail entirely (for
+	// every provider, not only the offending one), so a live CoinGecko FX
+	// subscription must not do that.
+	service, err := NewProviderStatusService(&providerStatusReaderStub{sources: []ProviderStatusSource{source}}, func() time.Time { return checkedAt }, calendar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := service.List(context.Background())
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("List() = (%#v, %v)", statuses, err)
+	}
+	status := statuses[0]
+	if status.ProviderCode.String() != "coingecko" || len(status.Scopes) != 1 ||
+		status.Scopes[0].Market != "fx_fx" || status.Scopes[0].SessionType != "continuous" {
+		t.Fatalf("coingecko status = %#v", status)
+	}
+}
+
 func TestProviderStatusServiceValidatesAndMapsReaderErrors(t *testing.T) {
 	calendar, _ := markettime.NewNYSECalendar()
 	if _, err := NewProviderStatusService(nil, nil, nil); err == nil {
@@ -139,7 +167,10 @@ func TestProviderStatusServiceValidatesAndMapsReaderErrors(t *testing.T) {
 func providerStatusSource(code string, status domain.ProviderStatus, observations ...ProviderSubscriptionObservation) ProviderStatusSource {
 	parsedCode, _ := domain.ParseCode(code)
 	return ProviderStatusSource{
-		ProviderID:   providerStatusID(map[string]string{"bybit": "019f1452-90f7-7992-a87a-ca2727898451", "longbridge": "019f1452-90f7-7992-a87a-ca2727898452", "disabled-source": "019f1452-90f7-7992-a87a-ca2727898453"}[code]),
+		ProviderID: providerStatusID(map[string]string{
+			"bybit": "019f1452-90f7-7992-a87a-ca2727898451", "longbridge": "019f1452-90f7-7992-a87a-ca2727898452",
+			"disabled-source": "019f1452-90f7-7992-a87a-ca2727898453", "coingecko": "019f1452-90f7-7992-a87a-ca2727898454",
+		}[code]),
 		ProviderCode: parsedCode, DisplayName: code, ProviderType: domain.ProviderTypeExchange,
 		ConfiguredStatus: status, Subscriptions: observations,
 	}

@@ -313,7 +313,8 @@ func ValidateAssetInstrument(asset Asset, instrument Instrument) error {
 	}
 	compatible := (asset.AssetType == AssetTypeStock && instrument.InstrumentType == InstrumentTypeEquity) ||
 		(asset.AssetType == AssetTypeETF && instrument.InstrumentType == InstrumentTypeETF) ||
-		(asset.AssetType == AssetTypeCrypto && instrument.InstrumentType == InstrumentTypeSpot)
+		(asset.AssetType == AssetTypeCrypto && instrument.InstrumentType == InstrumentTypeSpot) ||
+		(asset.AssetType == AssetTypeFX && instrument.InstrumentType == InstrumentTypeFX)
 	if !compatible {
 		return invalidData("asset and instrument types are incompatible")
 	}
