@@ -127,6 +127,14 @@ def _permissive_policy(**overrides: object) -> SimpleRiskPolicy:
     Lets each ``check_order`` test tighten back exactly the one threshold it
     means to exercise, without unrelated defaults (particularly the tight
     0.5% per-order risk budget) tripping first and confusing the assertion.
+
+    ``assumed_stop_loss_pct_equity``/``assumed_stop_loss_pct_crypto`` default
+    to 100% here (not ``SimpleRiskPolicy``'s own tighter defaults) so that
+    overriding just ``max_order_risk_pct_of_nav`` in a test reduces the
+    capital-at-risk formula back to plain ``order_notional / nav`` --
+    matching this test module's existing "tighten back exactly the one
+    threshold under test" pattern instead of also implicitly exercising the
+    stop-loss multiplier in every unrelated test.
     """
     defaults: dict[str, object] = {
         "max_single_equity_weight": Decimal("1"),
@@ -134,6 +142,8 @@ def _permissive_policy(**overrides: object) -> SimpleRiskPolicy:
         "max_crypto_category_weight": Decimal("1"),
         "min_cash_weight": Decimal("0"),
         "max_order_risk_pct_of_nav": Decimal("1"),
+        "assumed_stop_loss_pct_equity": Decimal("1"),
+        "assumed_stop_loss_pct_crypto": Decimal("1"),
         "max_held_positions": 1_000,
         "drawdown_stop_line": Decimal("1"),
     }
@@ -152,6 +162,15 @@ def _permissive_policy(**overrides: object) -> SimpleRiskPolicy:
         pytest.param({"max_single_equity_weight": Decimal("1.01")}, id="weight_cap_above_one"),
         pytest.param({"min_cash_weight": Decimal("1.5")}, id="cash_floor_above_one"),
         pytest.param({"max_order_risk_pct_of_nav": Decimal("-0.1")}, id="negative_order_budget"),
+        pytest.param(
+            {"assumed_stop_loss_pct_equity": Decimal("0")}, id="zero_stop_loss_pct_equity"
+        ),
+        pytest.param(
+            {"assumed_stop_loss_pct_crypto": Decimal("-0.05")}, id="negative_stop_loss_pct_crypto"
+        ),
+        pytest.param(
+            {"assumed_stop_loss_pct_equity": Decimal("1.5")}, id="stop_loss_pct_equity_above_one"
+        ),
         pytest.param({"drawdown_stop_line": Decimal("1.5")}, id="drawdown_stop_above_one"),
         pytest.param({"max_held_positions": 0}, id="zero_max_positions"),
         pytest.param({"max_held_positions": -1}, id="negative_max_positions"),
@@ -298,6 +317,10 @@ def test_check_order_restricted_member_only_blocks_buy_side(
 def test_check_order_enforces_max_order_risk_pct_of_nav(
     quantity: str, expected_approved: bool
 ) -> None:
+    # assumed_stop_loss_pct_equity=1 (via _permissive_policy's defaults)
+    # reduces capital-at-risk to plain order_notional / nav here, isolating
+    # the threshold-comparison logic from the stop-loss multiplier (which
+    # gets its own dedicated test below).
     portfolio_id = uuid4()
     member = _member(portfolio_id, _NVDA)
     state = _state(portfolio_id, (member,), (), nav="1000", positions_value="0", cash_value="1000")
@@ -309,6 +332,101 @@ def test_check_order_enforces_max_order_risk_pct_of_nav(
 
     assert result.approved is expected_approved
     assert "max_order_risk_pct_of_nav" in result.checked_rules
+
+
+@pytest.mark.parametrize(
+    "stop_loss_pct,expected_approved",
+    [
+        # order notional is 20% of NAV either way (2000/10000); capital at
+        # risk = 20% * stop_loss_pct, compared against a 1% budget.
+        ("0.04", True),  # 20% * 4% = 0.8% <= 1%
+        ("0.06", False),  # 20% * 6% = 1.2% > 1%
+    ],
+)
+def test_check_order_scales_order_risk_by_assumed_stop_loss_distance(
+    stop_loss_pct: str, expected_approved: bool
+) -> None:
+    portfolio_id = uuid4()
+    member = _member(portfolio_id, _NVDA)
+    state = _state(
+        portfolio_id, (member,), (), nav="10000", positions_value="0", cash_value="10000"
+    )
+    intent = _order(portfolio_id, _NVDA, "buy", "20", "100")  # 20*100=2000, 20% of NAV
+
+    result = _permissive_policy(
+        max_order_risk_pct_of_nav=Decimal("0.01"),
+        assumed_stop_loss_pct_equity=Decimal(stop_loss_pct),
+    ).check_order(intent, state)
+
+    assert result.approved is expected_approved
+    assert "max_order_risk_pct_of_nav" in result.checked_rules
+    if not expected_approved:
+        assert result.context["max_order_risk_pct_of_nav.assumed_stop_loss_pct"] == str(
+            Decimal(stop_loss_pct)
+        )
+
+
+def test_check_order_uses_the_wider_crypto_stop_loss_default_than_equity() -> None:
+    # Same order-notional-as-%-of-NAV (20%) and same tight budget (1%) for
+    # both categories; only the *default* assumed stop-loss distance differs
+    # (equity 8% vs crypto 15%, see SimpleRiskPolicy module docstring) --
+    # crypto's wider assumed stop pushes capital-at-risk over budget where
+    # equity's narrower one does not (20%*8%=1.6% > 1% actually also fails --
+    # this test isolates the category-default lookup itself, not budget
+    # feasibility, by using per-category budgets wide enough for equity but
+    # not crypto).
+    portfolio_id = uuid4()
+    equity_member = _member(portfolio_id, _NVDA)
+    crypto_member = _member(portfolio_id, _BTC)
+    state = _state(
+        portfolio_id,
+        (equity_member, crypto_member),
+        (),
+        nav="10000",
+        positions_value="0",
+        cash_value="10000",
+    )
+    # 20 * 100 = 2000 / 10000 = 20% of NAV for both.
+    equity_intent = _order(portfolio_id, _NVDA, "buy", "20", "100")
+    crypto_intent = _order(portfolio_id, _BTC, "buy", "20", "100")
+
+    # budget=2%: equity capital-at-risk 20%*8%=1.6% <= 2% (approved);
+    # crypto capital-at-risk 20%*15%=3.0% > 2% (rejected) -- same budget,
+    # different outcome, driven purely by the category default. Constructed
+    # directly (not via _permissive_policy, which overrides the stop-loss
+    # defaults to 100%) so SimpleRiskPolicy's real default stop distances
+    # are exercised; every other threshold is widened to isolate this one.
+    policy = SimpleRiskPolicy(
+        max_single_equity_weight=Decimal("1"),
+        max_single_crypto_weight=Decimal("1"),
+        max_crypto_category_weight=Decimal("1"),
+        min_cash_weight=Decimal("0"),
+        max_order_risk_pct_of_nav=Decimal("0.02"),
+        max_held_positions=1_000,
+        drawdown_stop_line=Decimal("1"),
+    )
+    equity_result = policy.check_order(equity_intent, state)
+    crypto_result = policy.check_order(crypto_intent, state)
+
+    assert equity_result.approved is True
+    assert crypto_result.approved is False
+
+
+def test_check_order_skips_the_order_risk_budget_for_an_unmapped_category() -> None:
+    # cash:USD has no defined single-asset cap or assumed stop-loss distance
+    # (mirrors _single_asset_cap's own "cash"/"other" scoping) -- the check
+    # is a documented no-op for it, not silently permissive by accident.
+    portfolio_id = uuid4()
+    member = _member(portfolio_id, _CASH)
+    state = _state(portfolio_id, (member,), (), nav="1000", positions_value="0", cash_value="1000")
+    intent = _order(portfolio_id, _CASH, "buy", "1000", "1")  # 100% of NAV in one order
+
+    result = _permissive_policy(max_order_risk_pct_of_nav=Decimal("0.005")).check_order(
+        intent, state
+    )
+
+    assert "max_order_risk_pct_of_nav" in result.checked_rules
+    assert not any("risk budget" in r for r in result.rejection_reasons)
 
 
 def test_check_order_sell_side_is_not_subject_to_the_order_risk_budget() -> None:

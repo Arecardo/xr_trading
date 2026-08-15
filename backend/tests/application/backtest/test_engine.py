@@ -203,18 +203,22 @@ async def _run(
 def _permissive_risk_policy() -> SimpleRiskPolicy:
     """A ``SimpleRiskPolicy`` wide enough to let a full-size rebalance through.
 
-    ``SimpleRiskPolicy``'s own *default* ``max_order_risk_pct_of_nav`` is
-    0.5% of NAV (`doc/ai_quant_trading_system_requirements.md` §4.3's
-    conservative end of its stated range), but ``SimpleRuleStrategy``'s
-    default single-asset ceiling is 20% -- a "buy" score proposes reaching
-    that whole 20% in one order, which the default 0.5% per-order budget
-    structurally rejects every time (0.5% << 20%). This is a genuine,
-    newly-surfaced interaction between BT-004's and BT-005's independently
-    chosen defaults (each reasonable in isolation; see the BT-003 task
-    report) -- not a test bug. Tests below that need a buy to actually
-    execute use this wider per-order budget so they can exercise the rest of
-    the day loop; every other threshold stays at ``SimpleRiskPolicy``'s own
-    conservative default.
+    ``SimpleRiskPolicy``'s default ``max_order_risk_pct_of_nav`` (0.5% of
+    NAV) is a *capital-at-risk* budget (2026-08-16 revision:
+    ``order_notional_pct * assumed_stop_loss_pct``, not raw order notional --
+    see ``domain.risk.simple_risk_policy``'s module docstring), but even
+    under that more forgiving interpretation, ``SimpleRuleStrategy``'s
+    default single-asset ceiling (20%) times the default equity stop-loss
+    assumption (8%) is 1.6%, still above the conservative 0.5% default
+    budget -- a "buy" score proposing to reach the full 20% ceiling in one
+    order is structurally rejected by the default budget every time. This is
+    expected, correct risk-based position sizing (scale into a position
+    across multiple orders rather than one lump-sum entry), not a bug -- see
+    the BT-003 task report and implementation plan for the fuller discussion
+    of whether order *sizing* should itself become risk-budget-aware later.
+    Tests below that need a buy to actually execute use this wider per-order
+    budget so they can exercise the rest of the day loop; every other
+    threshold stays at ``SimpleRiskPolicy``'s own conservative default.
     """
     return SimpleRiskPolicy(environment="backtest", max_order_risk_pct_of_nav=Decimal("0.25"))
 

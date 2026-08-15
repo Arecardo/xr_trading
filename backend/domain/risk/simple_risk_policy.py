@@ -23,6 +23,38 @@ below and the BT-005 task report for the full reasoning):
   each range as the default -- 0.5% per-order risk, 8% drawdown stop-line --
   rather than an arbitrary midpoint. Both are constructor parameters so a
   specific portfolio can widen them deliberately.
+
+**2026-08-16 revision -- "单笔交易最大组合风险" reinterpreted as stop-loss
+capital-at-risk, not raw order notional.** BT-003 surfaced a structural
+conflict: read literally as "order notional / NAV", the default 0.5% budget
+rejects any order that alone reaches the (also-default) 20%/15% single-asset
+weight caps, since those are separate, unrelated dimensions in §4.3's own
+list -- a position-size limit and a per-trade-risk limit should not collapse
+into the same number. Confirmed with the maintainer: "单笔交易最大组合风险" is
+meant in the standard trading risk-management sense -- how much capital
+would actually be lost if this specific trade hit its stop-loss, i.e.
+``order_notional * assumed_stop_loss_pct / nav``, not the order's raw size.
+This module has no real stop-loss-distance input to work with: `OrderIntent`
+(CONTRACT-003, frozen) carries no stop price, and `check_order` receives no
+analysis/volatility data (e.g. BT-002's ATR14) to derive one dynamically --
+extending `OrderIntent` or `RiskPolicy`'s signature to carry one is out of
+this change's scope (CONTRACT-003 is frozen). ``assumed_stop_loss_pct_equity``/
+``assumed_stop_loss_pct_crypto`` are therefore constructor-supplied, static,
+per-category *assumptions* about how far a stop would sit from entry --
+crypto gets a wider default (15%) than equity (8%) because BTC-USDT's daily
+range is routinely several times NVDA/QQQ's, so an equity-sized stop
+distance would be noise-triggered constantly if it were ever wired to a real
+stop mechanism. Both remain fully overridable; a portfolio with an actual
+stop-loss policy should pass its real distance in. This does **not** by
+itself mean a single order can now reach the full weight cap under default
+settings -- capital-at-risk-based sizing structurally implies scaling into a
+position across multiple orders as conviction is confirmed, rather than one
+lump-sum entry, which is standard risk-based position-sizing practice, not a
+remaining bug. Whether order *sizing* (not just approval) should itself
+respect this budget -- i.e. propose a smaller order when the full
+target-weight gap would breach it, instead of a binary reject -- is a
+separate, larger design question for `backend.backtest.rebalance` /
+`application.backtest.engine` to pick up later; flagged, not solved, here.
 - Maximum held position count has **no** documented value anywhere in
   ``doc/``. The current first-batch asset universe (§4.4) has exactly three
   members (NVDA, QQQ, BTC-USDT), so any default above 3 is inherently
@@ -93,6 +125,14 @@ DEFAULT_MIN_CASH_WEIGHT = Decimal("0.20")  # 最低现金比例：20%
 # docstring for the "risk-first" rationale) -- both overridable.
 DEFAULT_MAX_ORDER_RISK_PCT_OF_NAV = Decimal("0.005")  # 单笔交易最大组合风险：0.5%-1%，取 0.5%
 DEFAULT_DRAWDOWN_STOP_LINE = Decimal("0.08")  # 组合最大回撤停止线：8%-10%，取 8%
+
+# Assumed stop-loss distance from entry, used only to translate an order's
+# notional into capital-at-risk for DEFAULT_MAX_ORDER_RISK_PCT_OF_NAV (see
+# module docstring's 2026-08-16 revision) -- not a real stop-loss mechanism,
+# no order here is actually protected by a stop. Neither value is documented
+# in doc/; both are judgment calls, overridable per portfolio.
+DEFAULT_ASSUMED_STOP_LOSS_PCT_EQUITY = Decimal("0.08")  # NVDA/QQQ-scale swing-stop distance
+DEFAULT_ASSUMED_STOP_LOSS_PCT_CRYPTO = Decimal("0.15")  # BTC-USDT's materially wider daily range
 
 # Not documented anywhere in doc/ -- a BT-005 judgment call, see module docstring.
 DEFAULT_MAX_HELD_POSITIONS = 10
@@ -186,6 +226,8 @@ class SimpleRiskPolicy:
         max_crypto_category_weight: Decimal = DEFAULT_MAX_CRYPTO_CATEGORY_WEIGHT,
         min_cash_weight: Decimal = DEFAULT_MIN_CASH_WEIGHT,
         max_order_risk_pct_of_nav: Decimal = DEFAULT_MAX_ORDER_RISK_PCT_OF_NAV,
+        assumed_stop_loss_pct_equity: Decimal = DEFAULT_ASSUMED_STOP_LOSS_PCT_EQUITY,
+        assumed_stop_loss_pct_crypto: Decimal = DEFAULT_ASSUMED_STOP_LOSS_PCT_CRYPTO,
         max_held_positions: int = DEFAULT_MAX_HELD_POSITIONS,
         drawdown_stop_line: Decimal = DEFAULT_DRAWDOWN_STOP_LINE,
         peak_net_asset_value_by_portfolio: Mapping[UUID, Decimal] | None = None,
@@ -215,6 +257,15 @@ class SimpleRiskPolicy:
         ):
             if not (_ZERO <= value <= _ONE):
                 raise InvalidRiskConfigurationError(f"{name}={value} must be within [0, 1]")
+        for name, value in (
+            ("assumed_stop_loss_pct_equity", assumed_stop_loss_pct_equity),
+            ("assumed_stop_loss_pct_crypto", assumed_stop_loss_pct_crypto),
+        ):
+            if not (_ZERO < value <= _ONE):
+                raise InvalidRiskConfigurationError(
+                    f"{name}={value} must be within (0, 1] -- a zero or negative assumed stop "
+                    "distance makes the capital-at-risk check meaningless"
+                )
         if max_held_positions <= 0:
             raise InvalidRiskConfigurationError(
                 f"max_held_positions={max_held_positions} must be positive"
@@ -233,6 +284,8 @@ class SimpleRiskPolicy:
         self._max_crypto_category_weight = max_crypto_category_weight
         self._min_cash_weight = min_cash_weight
         self._max_order_risk_pct_of_nav = max_order_risk_pct_of_nav
+        self._assumed_stop_loss_pct_equity = assumed_stop_loss_pct_equity
+        self._assumed_stop_loss_pct_crypto = assumed_stop_loss_pct_crypto
         self._max_held_positions = max_held_positions
         self._drawdown_stop_line = drawdown_stop_line
         self._peak_net_asset_value_by_portfolio = peak_net_asset_value_by_portfolio
@@ -305,23 +358,38 @@ class SimpleRiskPolicy:
                 context["restricted_member_blocks_buy.member_status"] = member.member_status
 
             checked_rules.append("max_order_risk_pct_of_nav")
-            if nav > _ZERO:
-                order_risk_pct = order_notional / nav
-                if order_risk_pct > self._max_order_risk_pct_of_nav:
+            stop_loss_pct = self._assumed_stop_loss_pct(_asset_category(intent.asset_id))
+            if stop_loss_pct is not None:
+                if nav > _ZERO:
+                    order_notional_pct = order_notional / nav
+                    # Capital-at-risk, not raw order size (2026-08-16 revision,
+                    # see module docstring): how much of NAV would actually be
+                    # lost if this order's assumed stop-loss were hit.
+                    capital_at_risk_pct = order_notional_pct * stop_loss_pct
+                    if capital_at_risk_pct > self._max_order_risk_pct_of_nav:
+                        reasons.append(
+                            f"assuming a {stop_loss_pct:.2%} stop-loss distance, this order risks "
+                            f"{capital_at_risk_pct:.4%} of NAV, exceeds the per-order risk budget "
+                            f"of {self._max_order_risk_pct_of_nav:.4%}"
+                        )
+                        context["max_order_risk_pct_of_nav.order_notional_pct"] = str(
+                            order_notional_pct
+                        )
+                        context["max_order_risk_pct_of_nav.assumed_stop_loss_pct"] = str(
+                            stop_loss_pct
+                        )
+                        context["max_order_risk_pct_of_nav.capital_at_risk_pct"] = str(
+                            capital_at_risk_pct
+                        )
+                        context["max_order_risk_pct_of_nav.limit"] = str(
+                            self._max_order_risk_pct_of_nav
+                        )
+                else:
                     reasons.append(
-                        f"order notional is {order_risk_pct:.4%} of NAV, exceeds the per-order "
-                        f"risk budget of {self._max_order_risk_pct_of_nav:.4%}"
+                        "portfolio net_asset_value is 0 or unknown; cannot evaluate the per-order "
+                        "risk budget, fail-closed"
                     )
-                    context["max_order_risk_pct_of_nav.actual"] = str(order_risk_pct)
-                    context["max_order_risk_pct_of_nav.limit"] = str(
-                        self._max_order_risk_pct_of_nav
-                    )
-            else:
-                reasons.append(
-                    "portfolio net_asset_value is 0 or unknown; cannot evaluate the per-order "
-                    "risk budget, fail-closed"
-                )
-                context["max_order_risk_pct_of_nav.net_asset_value"] = str(nav)
+                    context["max_order_risk_pct_of_nav.net_asset_value"] = str(nav)
 
         if intent.side == "buy":
             # Scoped to "buy" only (2026-08-15 revision): a sell strictly
@@ -427,6 +495,21 @@ class SimpleRiskPolicy:
             return self._max_single_equity_weight
         if category == "crypto":
             return self._max_single_crypto_weight
+        return None
+
+    def _assumed_stop_loss_pct(
+        self, category: Literal["equity", "crypto", "cash", "other"]
+    ) -> Decimal | None:
+        """The assumed stop-loss distance used for capital-at-risk sizing, or ``None``.
+
+        ``None`` for ``"cash"``/``"other"`` mirrors ``_single_asset_cap``'s
+        own category scoping: neither a weight cap nor a capital-at-risk
+        budget is defined outside the two categories §4.3 actually names.
+        """
+        if category == "equity":
+            return self._assumed_stop_loss_pct_equity
+        if category == "crypto":
+            return self._assumed_stop_loss_pct_crypto
         return None
 
     # ------------------------------------------------------------------
