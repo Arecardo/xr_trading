@@ -66,14 +66,14 @@ POST /api/market-info/v1/instruments/precision:batch
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BE-003 | TODO | BE-002、DEC-002、BE-003a | `Position`、`CashBalance`、`ValuationSnapshot`、`PerformanceSnapshot` 落地；支持原币值 + 汇率（从 BE-003a 新增的 `fx:coingecko:usdt-usd` Instrument 查询）+ 基础货币折算；按 DEC-002 日切规则（UTC 自然日、非交易日 `price_status: stale`）生成净值快照 | 给定持仓/现金/汇率/价格，逐项对账净值；汇率缺失时不产出伪精确净值（fail-closed，不假设 1:1）；非交易日快照正确标记 `stale` 且不误报缺失 |
+| BE-003 | DONE（2026-08-15） | BE-002、DEC-002、BE-003a | `repository/valuation.py`（`SqlPositionRepository`/`SqlCashBalanceRepository`/`SqlValuationSnapshotRepository`/`SqlPerformanceSnapshotRepository`，四个新定义在 `domain/valuation/models.py` 的 Protocol 的实现，幂等 upsert）；`adapters/market_data/asset_instrument_resolver.py`（`StaticAssetInstrumentResolver` + `resolve_fx_instrument`，落地 BE-004 遗留的 `AssetInstrumentResolver` 静态映射，同时解决 BE-003 的 FX 查询）；`application/valuation/service.py`（`SqlValuationService`，`ValuationService` 的具体实现，`/bars` 单次 `order=desc,limit=1` 查询实现 DEC-002 日切/结转，sync Protocol 内部通过 `asyncio.run` 桥接 async `MarketInfoClient`，误用时 fail-fast 抛 `AsyncBridgingError` 而非静默死锁）；`domain/valuation/performance.py`（`PerformanceSnapshot` 落地 + 最小化的 `compute_performance_snapshot`，仅计算 `total_return_pct`/`max_drawdown_pct`/`annualized_volatility`，`sharpe_ratio`/`sortino_ratio`/`benchmark_return_pct` 显式留空，完整报告生成留给 BT-006/BT-007） | 单测覆盖正常/边界/失败路径（含 `httpx` 无网络访问的 fake `MarketInfoClient`）✅；针对真实 Postgres 的集成测试覆盖四个新 repository 的幂等 upsert/round-trip ✅；汇率或价格完全缺失时 fail-closed（`MissingPriceDataError`/`UnsupportedFxPairError`/`UnresolvedInstrumentError`，不产出快照、不假设 1:1）✅；非交易日通过结转上一收盘价正确标记 `stale`，组合级取最保守值 ✅；`ruff format --check`/`ruff check`/`mypy backend`/`pytest -q` 全绿（337 passed 含集成测试，或无 DB 时 304 passed + 33 skipped）✅ |
 
 ## 3. BE-004 行情服务集成契约（backend 客户端）
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
 | BE-004 | DONE（2026-08-11） | BE-001、BE-004a | `adapters/market_data` 客户端（`httpx.AsyncClient`）：最新价/K 线/instrument/批量精度查询、`PrecisionCache`（TTL + fail-closed）、订阅同步（`compute_desired_instruments` + `sync_collection_subscriptions`，创建/重新启用/禁用，API 无 DELETE 故不删除行） | 契约测试（30 个，`httpx.MockTransport`）✅；精度缓存过期/不可用时 fail-closed（`PrecisionUnavailableError`，不返回旧值/默认值）✅；订阅同步正确 diff 三种状态 ✅ |
-| **BE-004 遗留待办（不阻塞已完成范围，交给下一个消费者处理）** | — | — | `asset_id`（如 `crypto:bybit:BTC-USDT`）→ 行情服务 `instrument_code`/`provider` 的解析没有任何地方实现——`AssetInstrumentResolver` 故意设计成一个 `Protocol`，由调用方注入具体实现，而不是猜一个映射公式。BE-003（或更早的某个小任务）落地时需要提供一个真正的实现（比如基于 `Asset.provider_symbols` + 查 `/instruments?asset_code=`，或者维护一张静态映射表） | — |
+| **BE-004 遗留待办（不阻塞已完成范围，交给下一个消费者处理）** | 已由 BE-003 解决（2026-08-15） | — | `asset_id`（如 `crypto:bybit:BTC-USDT`）→ 行情服务 `instrument_code`/`provider` 的解析没有任何地方实现——`AssetInstrumentResolver` 故意设计成一个 `Protocol`，由调用方注入具体实现，而不是猜一个映射公式。BE-003 提供了 `adapters/market_data/asset_instrument_resolver.StaticAssetInstrumentResolver`：基于 DEC-001 冻结的固定标的清单的静态映射表（非动态发现），并在模块文档中明确标注「标的清单变为动态时需重新评估」 | — |
 
 ## 4. M2 退出门禁
 

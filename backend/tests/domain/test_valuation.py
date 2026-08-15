@@ -10,7 +10,13 @@ from uuid import UUID, uuid4
 import pytest
 
 from domain.portfolios import Portfolio, PortfolioMember
-from domain.valuation import CashBalance, PortfolioState, Position, ValuationSnapshot
+from domain.valuation import (
+    CashBalance,
+    PerformanceSnapshot,
+    PortfolioState,
+    Position,
+    ValuationSnapshot,
+)
 
 
 def _portfolio(portfolio_id: UUID | None = None) -> Portfolio:
@@ -97,3 +103,37 @@ def test_portfolio_state_composes_portfolio_members_positions_cash_and_snapshot(
     assert state.positions == (position,)
     assert state.cash == (cash,)
     assert state.latest_snapshot is snapshot
+
+
+def test_performance_snapshot_allows_all_metric_fields_to_be_none() -> None:
+    portfolio_id = uuid4()
+    snapshot = PerformanceSnapshot(
+        portfolio_id=portfolio_id,
+        as_of=date(2026, 8, 8),
+        total_return_pct=None,
+        max_drawdown_pct=None,
+        annualized_volatility=None,
+        sharpe_ratio=None,
+        sortino_ratio=None,
+        benchmark_return_pct=None,
+    )
+
+    assert snapshot.portfolio_id == portfolio_id
+    assert snapshot.total_return_pct is None
+    assert snapshot.sharpe_ratio is None
+
+
+def test_performance_snapshot_accepts_decimal_metric_values() -> None:
+    snapshot = PerformanceSnapshot(
+        portfolio_id=uuid4(),
+        as_of=date(2026, 8, 8),
+        total_return_pct=Decimal("0.05"),
+        max_drawdown_pct=Decimal("-0.12"),
+        annualized_volatility=Decimal("0.20"),
+        sharpe_ratio=None,
+        sortino_ratio=None,
+        benchmark_return_pct=None,
+    )
+
+    assert isinstance(snapshot.total_return_pct, Decimal)
+    assert snapshot.max_drawdown_pct == Decimal("-0.12")

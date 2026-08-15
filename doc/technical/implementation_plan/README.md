@@ -78,8 +78,8 @@ M1 与 M2' 在 M0 冻结后即可并行；M2 依赖 M1（复用同一批 reposit
 | BE-004、BT-002 | DONE（2026-08-11） | 详见 `02_portfolio_and_market_integration.md`、`03_backtest_data_and_indicators.md`；BE-004 留了一个明确的遗留待办（`asset_id`→`instrument_code` 解析器，故意做成待注入的 Protocol，未擅自猜映射规则） |
 | BE-003a | DONE（2026-08-15） | 详见 `02_portfolio_and_market_integration.md`；新增 CoinGecko provider + `FX` 类型（domain 枚举 + core CHECK 约束），常驻采集调度；顺手发现并修了两个预先存在的 bug（`test-integration.sh` 漏加载 `002_core_catalog_seed.sql` 导致集成测试基线本就是坏的；`schedulingMarket`/`providerScopeFor` 对未知资产类型组合会中断整个调度扫描，不只是当前订阅） |
 | BT-004 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRuleStrategy` 落地，留了 4 条遗留待办（domain→backtest 依赖、`trading_status` 填充责任、`candidate` 状态是否该买入、默认阈值均为判断非钉死值） |
-| BE-003 | READY | 依赖的 BE-002/DEC-002/BE-003a 均已完成 |
-| BT-005 | READY | 依赖的 BT-004、CONTRACT-003 均已就绪 |
+| BE-003 | DONE（2026-08-15） | 详见 `02_portfolio_and_market_integration.md`；落地四个新 repository、`StaticAssetInstrumentResolver`（解决 BE-004 遗留的解析器缺口）、`SqlValuationService`（sync Protocol 内部 `asyncio.run` 桥接 async 行情客户端，误用 fail-fast）、`PerformanceSnapshot`（仅 `total_return_pct`/`max_drawdown_pct`/`annualized_volatility`，`sharpe_ratio`/`sortino_ratio`/`benchmark_return_pct` 留给 BT-006/BT-007） |
+| BT-005 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRiskPolicy` 落地，`check_order`/`check_target_weights`/`replaced_checks` 均实现；多项阈值（单资产/加密类别权重上限、现金下限、单笔风险预算、回撤停止线、最大持仓数）取自需求文档 §4.3 或作为已标注的判断值；最大回撤检查依赖的「历史峰值 NAV」目前只能靠构造参数注入，真正的逐日峰值追踪要等 BT-003 事件循环落地 |
 | 其余任务（BT-003、BT-006~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
 
 ## 7. 首期明确不做

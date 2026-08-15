@@ -18,12 +18,14 @@ BE-002 (CONTRACT-004) landed:
   methods are synchronous, so the implementations run on the sync engine.
 
 Migration coverage vs. repository coverage: all ten CONTRACT-004 tables
-exist via the Alembic migration in ``backend/migrations/versions/``, but
-only ``assets``, ``portfolios``/``portfolio_members``, and
-``account_bindings`` have repository implementations here.
-``positions``/``cash_balances``/``valuation_snapshots``/
-``performance_snapshots`` (BE-003, valuation) and ``orders``/``fills`` (a
-future execution task) are migration-only for now, by design -- CONTRACT-001
-does not freeze a ``ValuationService``/``ExecutionService`` implementation
-for this task to satisfy.
+exist via the Alembic migration in ``backend/migrations/versions/``.
+BE-003 added ``valuation.py`` -- implementations of
+``domain.valuation.models.PositionRepository``/``CashBalanceRepository``/
+``ValuationSnapshotRepository``/``PerformanceSnapshotRepository`` (four
+Protocols BE-003 itself defines; CONTRACT-001 never froze per-entity
+repository interfaces for the ``valuation`` subpackage the way it did for
+``assets``/``portfolios``/``accounts``). ``orders``/``fills`` (a future
+execution task) remain migration-only for now, by design -- CONTRACT-001
+does not freeze an ``ExecutionService`` implementation for this task to
+satisfy.
 """
