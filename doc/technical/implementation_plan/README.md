@@ -80,7 +80,8 @@ M1 与 M2' 在 M0 冻结后即可并行；M2 依赖 M1（复用同一批 reposit
 | BT-004 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRuleStrategy` 落地，留了 4 条遗留待办（domain→backtest 依赖、`trading_status` 填充责任、`candidate` 状态是否该买入、默认阈值均为判断非钉死值） |
 | BE-003 | DONE（2026-08-15） | 详见 `02_portfolio_and_market_integration.md`；落地四个新 repository、`StaticAssetInstrumentResolver`（解决 BE-004 遗留的解析器缺口）、`SqlValuationService`（sync Protocol 内部 `asyncio.run` 桥接 async 行情客户端，误用 fail-fast）、`PerformanceSnapshot`（仅 `total_return_pct`/`max_drawdown_pct`/`annualized_volatility`，`sharpe_ratio`/`sortino_ratio`/`benchmark_return_pct` 留给 BT-006/BT-007） |
 | BT-005 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRiskPolicy` 落地，`check_order`/`check_target_weights`/`replaced_checks` 均实现；多项阈值（单资产/加密类别权重上限、现金下限、单笔风险预算、回撤停止线、最大持仓数）取自需求文档 §4.3 或作为已标注的判断值；最大回撤检查依赖的「历史峰值 NAV」目前只能靠构造参数注入，真正的逐日峰值追踪要等 BT-003 事件循环落地；`check_order` 的单资产权重上限检查已修正为仅评估买单，卖出永不因该规则被拒绝（组合超上限时只许减仓不许加仓） |
-| 其余任务（BT-003、BT-006~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
+| BT-003 | DONE（2026-08-16） | 详见 `04_backtest_matching_strategy_risk.md`；`BacktestEngine` 落地，日 D 收盘决策/日 D+1 开盘成交避免前视偏差，复用 `SimpleRuleStrategy`/`SimpleRiskPolicy`/`ExecutionService` 同一套代码；**发现一个需要用户裁决的问题**：`SimpleRiskPolicy` 默认单笔风险预算（0.5%）与 `SimpleRuleStrategy` 默认单资产权重上限（20%）冲突，默认配置下策略实际无法建仓，疑似「单笔交易最大组合风险」需求表述本身有歧义（止损资金风险 vs 仓位名义金额），待用户确认解读后调整 |
+| 其余任务（BT-006~007） | TODO | 依赖尚未满足，按 README §5 并行波次顺序推进 |
 
 ## 7. 首期明确不做
 

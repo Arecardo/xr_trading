@@ -1,0 +1,436 @@
+"""Integration-style tests for application.backtest.engine.BacktestEngine (BT-003).
+
+Drives the full day loop with fake historical data (``httpx.MockTransport``,
+matching ``tests/backtest/test_loader.py``'s established pattern -- no real
+network call) and, where the test needs full control over the decision
+rather than depending on ``SimpleRuleStrategy``'s indicator warmup timing, a
+small fake ``Strategy``. Uses the real ``SimpleRuleStrategy``/
+``SimpleRiskPolicy`` for the broader scenarios so this suite exercises the
+actual BT-004/BT-005 code the engine is meant to orchestrate, not a mock of
+it.
+
+Synthetic universe: NVDA (monotonically uptrending close, so
+``SimpleRuleStrategy`` eventually scores >= 2 and buys) and QQQ (flat,
+serving as both a portfolio member and the benchmark) -- both quote in USD,
+the portfolio's base currency, so no FX series is needed for this suite.
+The BTC-USDT/FX conversion path (``_price_and_status_at``'s non-1.0-rate
+branch) is exercised by ``application.backtest.engine``'s own logic being
+straightforward pass-through arithmetic, but is not covered by a dedicated
+end-to-end test here -- flagged as an open gap in the BT-003 task report.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+import httpx
+import pytest
+
+from adapters.market_data.models import InstrumentPrecision, PrecisionBatchResult
+from adapters.market_data.precision_cache import PrecisionCache
+from application.backtest.config import BacktestConfig
+from application.backtest.engine import BacktestEngine
+from application.backtest.models import BacktestResult
+from backtest.calendar import is_us_equity_trading_day
+from backtest.instrument_ids import INSTRUMENT_ID_BY_CODE
+from backtest.loader import HistoricalDataLoader
+from backtest.market_data_client import MarketInfoBarsClient
+from domain.assets.models import Asset
+from domain.portfolios.models import Portfolio, PortfolioMember
+from domain.risk.simple_risk_policy import SimpleRiskPolicy
+from domain.strategies.models import AnalysisResult, StrategyOutput
+from domain.strategies.simple_rule_strategy import SimpleRuleStrategy
+from domain.valuation.models import PortfolioState
+
+_PORTFOLIO_ID = uuid4()
+_NVDA_ID = "equity:nasdaq:NVDA"
+_QQQ_ID = "equity:nasdaq:QQQ"
+_NVDA_CODE = "instrument.nasdaq.equity.nvda"
+_QQQ_CODE = "instrument.nasdaq.etf.qqq"
+
+_START = date(2024, 1, 2)
+_END = _START + timedelta(days=100)
+
+
+def _trading_days(start: date, end: date) -> list[date]:
+    days: list[date] = []
+    day = start
+    while day <= end:
+        if is_us_equity_trading_day(day):
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+def _nvda_prices() -> list[tuple[date, Decimal]]:
+    # Monotonically uptrending -- eventually pushes SimpleRuleStrategy's
+    # score to >= 2 (ma_trend up, close>ma20/ma50, positive relative
+    # strength vs the flat QQQ benchmark).
+    return [
+        (day, Decimal("100") + Decimal(i) * Decimal("2"))
+        for i, day in enumerate(_trading_days(_START, _END))
+    ]
+
+
+def _qqq_prices() -> list[tuple[date, Decimal]]:
+    return [(day, Decimal("100")) for day in _trading_days(_START, _END)]
+
+
+def _bars_payload(entries: Sequence[tuple[date, Decimal]]) -> dict[str, object]:
+    return {
+        "bars": [
+            {
+                "open_time": f"{day.isoformat()}T00:00:00Z",
+                "close_time": f"{day.isoformat()}T00:00:00Z",
+                "open": str(price),
+                "high": str(price),
+                "low": str(price),
+                "close": str(price),
+                "volume": "1000",
+                "quality_status": "valid",
+            }
+            for day, price in entries
+        ],
+        "next_cursor": None,
+    }
+
+
+def _make_handler() -> Callable[[httpx.Request], httpx.Response]:
+    payloads = {
+        _NVDA_CODE: _bars_payload(_nvda_prices()),
+        _QQQ_CODE: _bars_payload(_qqq_prices()),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        instrument_code = dict(request.url.params)["instrument_code"]
+        return httpx.Response(200, json=payloads[instrument_code])
+
+    return handler
+
+
+def _make_fixed_handler(payload: dict[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    return handler
+
+
+def _portfolio(benchmark_asset_id: str | None = _QQQ_ID) -> Portfolio:
+    return Portfolio(
+        portfolio_id=_PORTFOLIO_ID,
+        name="BT-003 Test Growth",
+        base_currency="USD",
+        benchmark_asset_id=benchmark_asset_id,
+        risk_level="moderate",
+        execution_mode="backtest",
+        status="active",
+    )
+
+
+def _members() -> tuple[PortfolioMember, ...]:
+    return (
+        PortfolioMember(
+            portfolio_id=_PORTFOLIO_ID,
+            asset_id=_NVDA_ID,
+            member_status="approved",
+            target_weight_min=None,
+            target_weight_max=None,
+        ),
+        PortfolioMember(
+            portfolio_id=_PORTFOLIO_ID,
+            asset_id=_QQQ_ID,
+            member_status="approved",
+            target_weight_min=None,
+            target_weight_max=None,
+        ),
+    )
+
+
+def _assets() -> dict[str, Asset]:
+    return {
+        _NVDA_ID: Asset(
+            asset_id=_NVDA_ID,
+            asset_type="STOCK",
+            symbol="NVDA",
+            venue="nasdaq",
+            quote_currency="USD",
+            provider_symbols={"longbridge": "NVDA.US"},
+            trading_status="tradable",
+        ),
+        _QQQ_ID: Asset(
+            asset_id=_QQQ_ID,
+            asset_type="ETF",
+            symbol="QQQ",
+            venue="nasdaq",
+            quote_currency="USD",
+            provider_symbols={"longbridge": "QQQ.US"},
+            trading_status="tradable",
+        ),
+    }
+
+
+async def _run(
+    config: BacktestConfig,
+    *,
+    members: tuple[PortfolioMember, ...] | None = None,
+    portfolio: Portfolio | None = None,
+    strategy: SimpleRuleStrategy | _FixedWeightStrategy | None = None,
+    risk_policy: SimpleRiskPolicy | None = None,
+    precision_cache: PrecisionCache | None = None,
+    handler: Callable[[httpx.Request], httpx.Response] | None = None,
+) -> BacktestResult:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler or _make_handler()),
+        base_url="http://market-info.test",
+    ) as http_client:
+        loader = HistoricalDataLoader(MarketInfoBarsClient(http_client))
+        engine = BacktestEngine(
+            config=config,
+            portfolio=portfolio or _portfolio(),
+            members=members if members is not None else _members(),
+            assets=_assets(),
+            strategy=strategy or SimpleRuleStrategy(),
+            risk_policy=risk_policy or _permissive_risk_policy(),
+            historical_data_loader=loader,
+            precision_cache=precision_cache,
+        )
+        return await engine.run()
+
+
+def _permissive_risk_policy() -> SimpleRiskPolicy:
+    """A ``SimpleRiskPolicy`` wide enough to let a full-size rebalance through.
+
+    ``SimpleRiskPolicy``'s own *default* ``max_order_risk_pct_of_nav`` is
+    0.5% of NAV (`doc/ai_quant_trading_system_requirements.md` §4.3's
+    conservative end of its stated range), but ``SimpleRuleStrategy``'s
+    default single-asset ceiling is 20% -- a "buy" score proposes reaching
+    that whole 20% in one order, which the default 0.5% per-order budget
+    structurally rejects every time (0.5% << 20%). This is a genuine,
+    newly-surfaced interaction between BT-004's and BT-005's independently
+    chosen defaults (each reasonable in isolation; see the BT-003 task
+    report) -- not a test bug. Tests below that need a buy to actually
+    execute use this wider per-order budget so they can exercise the rest of
+    the day loop; every other threshold stays at ``SimpleRiskPolicy``'s own
+    conservative default.
+    """
+    return SimpleRiskPolicy(environment="backtest", max_order_risk_pct_of_nav=Decimal("0.25"))
+
+
+class _FixedWeightStrategy:
+    """A minimal ``Strategy`` that always proposes the same fixed target weight.
+
+    Used only for the last-day-in-range edge case test, where we need full
+    control over exactly when a fresh buy decision is proposed --
+    ``SimpleRuleStrategy``'s indicator-warmup timing is not something a test
+    should hardcode a specific day against.
+    """
+
+    strategy_id = "fixed_weight_test"
+    version = "1.0.0"
+
+    def __init__(self, asset_id: str, weight: Decimal, base_currency: str) -> None:
+        self._asset_id = asset_id
+        self._weight = weight
+        self._base_currency = base_currency
+
+    def generate_targets(
+        self, analysis: AnalysisResult, portfolio_state: PortfolioState
+    ) -> StrategyOutput:
+        cash_id = f"cash:{self._base_currency}"
+        return StrategyOutput(
+            portfolio_id=portfolio_state.portfolio.portfolio_id,
+            as_of=analysis.as_of,
+            asset_scores=(),
+            target_weights={self._asset_id: self._weight, cash_id: Decimal("1") - self._weight},
+            rebalance_notes=(),
+        )
+
+
+class _FakePrecisionFetcher:
+    """Fake ``PrecisionBatchFetcher`` -- structural, no real network call."""
+
+    def __init__(self, precisions: dict[UUID, InstrumentPrecision]) -> None:
+        self._precisions = precisions
+
+    async def get_precision_batch(self, instrument_ids: Sequence[UUID]) -> PrecisionBatchResult:
+        items = tuple(self._precisions[i] for i in instrument_ids if i in self._precisions)
+        missing = tuple(i for i in instrument_ids if i not in self._precisions)
+        return PrecisionBatchResult(items=items, missing_instrument_ids=missing)
+
+
+# --- tests ------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_backtest_is_reproducible_given_identical_input() -> None:
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+    result_a = await _run(config)
+    result_b = await _run(config)
+
+    assert result_a.equity_curve == result_b.equity_curve
+    assert result_a.trades == result_b.trades
+    assert result_a.final_positions == result_b.final_positions
+    assert result_a.final_cash == result_b.final_cash
+
+
+@pytest.mark.anyio
+async def test_uptrend_eventually_triggers_a_filled_nvda_buy() -> None:
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+    result = await _run(config)
+
+    filled_buys = [
+        t
+        for t in result.trades
+        if t.status == "filled" and t.side == "buy" and t.asset_id == _NVDA_ID
+    ]
+    assert filled_buys, "expected at least one filled NVDA buy over the uptrending series"
+    assert result.final_positions[_NVDA_ID] > Decimal("0")
+    # Every equity-curve entry is UTC-calendar-day gapless per DEC-002.
+    assert len(result.equity_curve) == (_END - _START).days + 1
+
+
+@pytest.mark.anyio
+async def test_commission_and_slippage_measurably_reduce_final_equity() -> None:
+    zero_cost_config = BacktestConfig(
+        portfolio_id=_PORTFOLIO_ID,
+        start_date=_START,
+        end_date=_END,
+        commission_pct=Decimal("0"),
+        min_commission=Decimal("0"),
+        slippage_pct=Decimal("0"),
+    )
+    costly_config = BacktestConfig(
+        portfolio_id=_PORTFOLIO_ID,
+        start_date=_START,
+        end_date=_END,
+        commission_pct=Decimal("0.01"),
+        min_commission=Decimal("1"),
+        slippage_pct=Decimal("0.01"),
+    )
+
+    zero_cost_result = await _run(zero_cost_config)
+    costly_result = await _run(costly_config)
+
+    assert any(t.status == "filled" for t in zero_cost_result.trades)
+    assert any(t.status == "filled" for t in costly_result.trades)
+
+    zero_cost_final_nav = zero_cost_result.equity_curve[-1].net_asset_value
+    costly_final_nav = costly_result.equity_curve[-1].net_asset_value
+    assert costly_final_nav < zero_cost_final_nav
+
+
+@pytest.mark.anyio
+async def test_risk_rejected_order_never_fills() -> None:
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+    strict_risk_policy = SimpleRiskPolicy(
+        environment="backtest",
+        max_order_risk_pct_of_nav=Decimal("0.0000001"),  # blocks every realistic order
+    )
+
+    result = await _run(config, risk_policy=strict_risk_policy)
+
+    assert not any(t.status == "filled" for t in result.trades)
+    assert any(t.status == "rejected" for t in result.trades)
+    assert result.final_positions[_NVDA_ID] == Decimal("0")
+    assert result.final_cash == config.initial_cash
+
+
+@pytest.mark.anyio
+async def test_restricted_mode_below_min_quantity_never_fills_and_records_reason() -> None:
+    nvda_uuid = INSTRUMENT_ID_BY_CODE[_NVDA_CODE]
+    qqq_uuid = INSTRUMENT_ID_BY_CODE[_QQQ_CODE]
+    as_of = datetime(2024, 1, 1, tzinfo=UTC)
+    fake_fetcher = _FakePrecisionFetcher(
+        {
+            nvda_uuid: InstrumentPrecision(
+                instrument_id=nvda_uuid,
+                instrument_code=_NVDA_CODE,
+                price_scale=2,
+                quantity_scale=0,
+                lot_size=Decimal("1000"),  # absurdly coarse -- any realistic order rounds to 0
+                min_quantity=Decimal("1000"),
+                as_of=as_of,
+            ),
+            qqq_uuid: InstrumentPrecision(
+                instrument_id=qqq_uuid,
+                instrument_code=_QQQ_CODE,
+                price_scale=2,
+                quantity_scale=0,
+                lot_size=Decimal("1"),
+                min_quantity=Decimal("1"),
+                as_of=as_of,
+            ),
+        }
+    )
+    precision_cache = PrecisionCache(fake_fetcher)
+    config = BacktestConfig(
+        portfolio_id=_PORTFOLIO_ID,
+        start_date=_START,
+        end_date=_END,
+        precision_mode="restricted",
+    )
+
+    result = await _run(config, precision_cache=precision_cache)
+
+    nvda_trades = [t for t in result.trades if t.asset_id == _NVDA_ID]
+    assert nvda_trades, "expected at least one NVDA order attempt"
+    assert not any(t.status == "filled" for t in nvda_trades)
+    assert any(t.status == "skipped_min_quantity" for t in nvda_trades)
+    assert result.final_positions[_NVDA_ID] == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_stale_equity_day_has_no_new_order_but_still_values_holdings() -> None:
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+    result = await _run(config)
+
+    first_fill = next(t for t in result.trades if t.status == "filled" and t.asset_id == _NVDA_ID)
+    assert first_fill.trade_date is not None
+
+    stale_snapshot_after_fill = next(
+        snap
+        for snap in result.equity_curve
+        if snap.valuation_date > first_fill.trade_date and snap.price_status == "stale"
+    )
+    assert stale_snapshot_after_fill.positions_value > Decimal("0")
+    assert not any(
+        t.asset_id == _NVDA_ID and t.decision_date == stale_snapshot_after_fill.valuation_date
+        for t in result.trades
+    )
+
+
+@pytest.mark.anyio
+async def test_last_day_decision_is_recorded_as_skipped_not_dropped() -> None:
+    start = date(2024, 1, 2)  # Tuesday
+    end = date(2024, 1, 3)  # Wednesday -- two consecutive trading days, no weekend involved
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=start, end_date=end)
+    permissive_risk_policy = SimpleRiskPolicy(
+        environment="backtest",
+        max_single_equity_weight=Decimal("1"),
+        max_order_risk_pct_of_nav=Decimal("1"),
+        min_cash_weight=Decimal("0"),
+        drawdown_stop_line=Decimal("1"),
+    )
+    strategy = _FixedWeightStrategy(_NVDA_ID, Decimal("0.95"), "USD")
+    handler = _make_fixed_handler(_bars_payload([(start, Decimal("100")), (end, Decimal("101"))]))
+
+    result = await _run(
+        config,
+        members=(_members()[0],),  # NVDA only -- no benchmark needed
+        portfolio=_portfolio(benchmark_asset_id=None),
+        strategy=strategy,
+        risk_policy=permissive_risk_policy,
+        handler=handler,
+    )
+
+    day0_trade = next(t for t in result.trades if t.decision_date == start)
+    assert day0_trade.status == "filled"
+    assert day0_trade.trade_date == end
+
+    day1_trade = next(t for t in result.trades if t.decision_date == end)
+    assert day1_trade.status == "skipped_no_next_day"
+    assert day1_trade.trade_date is None
+    assert day1_trade.quantity == Decimal("0")
