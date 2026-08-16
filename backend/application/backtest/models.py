@@ -21,6 +21,25 @@ when they consume it.
 ValuationSnapshot`` verbatim (the task brief's explicit instruction), not a
 new dataclass -- one entry per UTC calendar day in ``[start_date, end_date]``,
 gapless, per DEC-002.
+
+``BacktestResult.benchmark_price_series`` (BT-006 addition, 2026-08-16):
+narrow, documented additive field, not a breaking change to this
+not-frozen contract (see this module's own docstring above). Populated by
+``application.backtest.engine.BacktestEngine`` from the benchmark asset's
+``AlignedSeries`` it already loads internally (``_load_asset_series``) to
+feed ``compute_indicators``' relative-strength input -- exposing it here
+costs no extra network call. One ``(trading_day, close)`` pair per UTC
+calendar day in ``[config.start_date, config.end_date]``, gapless, same
+alignment as ``equity_curve``. ``None`` iff ``Portfolio.benchmark_asset_id``
+is unset. ``close`` is in the benchmark asset's own *native quote
+currency*, not FX-converted to ``config.base_currency`` -- the engine does
+not load an FX series for the benchmark's currency unless a portfolio
+member happens to already need that same currency pair, and BT-006 was
+directed not to add an extra network call to make this addition. Consumers
+computing a benchmark total return from this series should be aware the
+result is only directly comparable to the portfolio's own base-currency
+return when the benchmark's ``quote_currency == config.base_currency``
+(the common case, e.g. a USD portfolio benchmarked against QQQ in USD).
 """
 
 from __future__ import annotations
@@ -108,6 +127,7 @@ class BacktestResult:
     replaced_risk_checks: tuple[str, ...]
     final_positions: dict[str, Decimal]
     final_cash: Decimal
+    benchmark_price_series: tuple[tuple[date, Decimal], ...] | None = None
 
 
 __all__ = ["BacktestResult", "Side", "TradeRecord", "TradeStatus"]

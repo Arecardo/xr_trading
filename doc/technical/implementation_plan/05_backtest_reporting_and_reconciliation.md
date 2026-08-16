@@ -7,7 +7,8 @@
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BT-006 | TODO | BT-003 | 总收益、最大回撤、年化波动、Sharpe、Sortino、胜率、盈亏比、换手率、基准对比；逐日对账目标权重/持仓/现金/汇率/净值 | 相同输入产出相同结果；权益曲线可逐日对账；汇率缺失时对应日期不产出伪精确净值（沿用 BE-003 同一约束） |
+| BT-006 | DONE（2026-08-16） | BT-003 | `backend/application/backtest/metrics.py`（`compute_backtest_metrics`，复用 BE-003 的 `compute_performance_snapshot` 算总收益/最大回撤/年化波动，新增 Sharpe/Sortino（无风险利率默认 0%，可覆盖）、胜率/盈亏比（按资产 FIFO 配对已平仓的买卖手数，毛值不扣手续费）、换手率（成交名义金额/期间平均 NAV）、基准对比（`BacktestResult` 新增 `benchmark_price_series` 字段，由引擎内部已加载的基准序列填充，无需额外网络请求））+ `backend/application/backtest/reconciliation.py`（`reconcile_backtest_result`，独立重放 `trades` 校验现金/NAV 内部一致性/期末持仓/期末现金，与引擎自身的运行时状态无关） | 29 个新单测覆盖正常/边界/失败路径 ✅；相同输入产出相同结果 ✅；`ruff`/`mypy`/`pytest`（380 passed）/`security-check` 全绿 |
+| **BT-006 已知缺口** | — | — | M4 退出条件字面要求「逐日对账目标权重/持仓/现金/汇率/净值」五项，但 `BacktestResult` 目前只有离散成交记录 + 逐日聚合的 `positions_value`/`cash_value`/`net_asset_value`，没有逐日的目标权重记录、逐资产持仓/价格明细或逐日汇率——`reconcile_backtest_result` 因此只能独立复算「现金逐日」「NAV 内部一致性（`positions_value+cash_value==net_asset_value`）逐日」「期末持仓」「期末现金」四项，逐日持仓的美元市值/目标权重/汇率未被独立校验（重新拉取同一份行情数据校验价格并非真正独立）。若要满足字面上的五项，需要给 `BacktestResult`/`TradeRecord` 追加字段，留给 BT-007/BT-003a 或后续任务 | — |
 
 ## 2. BT-007 回测报告
 

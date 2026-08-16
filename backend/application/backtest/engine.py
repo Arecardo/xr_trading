@@ -132,6 +132,17 @@ is not specific to this simulation; the conservative default thresholds
 (0.5% per-order risk, 20% cash floor) make the realistic overshoot
 negligible. Not fixed here -- flagged as an open item for BT-003a/BT-006 if
 it ever proves material.
+
+**9. ``BacktestResult.benchmark_price_series`` (BT-006 addition).** BT-006
+needed the benchmark asset's own price series (to compute a buy-and-hold
+``benchmark_return_pct``) but this engine did not previously expose the
+benchmark ``AlignedSeries`` it already loads internally in
+``_load_asset_series``/uses in ``_compute_all_indicators``. Per
+``application.backtest.models``'s explicit "not a frozen cross-task
+contract" note, this is a narrow additive field
+(``BacktestResult.benchmark_price_series``), populated at the end of
+``_run_day_loop`` from data already in memory -- no new network call, no
+change to the day loop's own logic or existing fields.
 """
 
 from __future__ import annotations
@@ -630,7 +641,30 @@ class BacktestEngine:
             replaced_risk_checks=self._risk_policy.replaced_checks(),
             final_positions=positions,
             final_cash=cash,
+            benchmark_price_series=self._compute_benchmark_price_series(asset_series),
         )
+
+    def _compute_benchmark_price_series(
+        self, asset_series: Mapping[str, AlignedSeries]
+    ) -> tuple[tuple[date, Decimal], ...] | None:
+        """Project the already-loaded benchmark series down to ``(day, close)`` pairs.
+
+        BT-006 addition -- see ``application.backtest.models.BacktestResult
+        .benchmark_price_series``'s docstring for the full rationale
+        (no extra network call, native quote currency, ``None`` iff no
+        benchmark is configured). ``asset_series`` always contains the
+        benchmark's series whenever ``benchmark_asset_id`` is set --
+        ``_load_asset_series`` loads it unconditionally (either as a
+        tradable member or read-only) -- the ``.get`` is defensive, not an
+        expected path.
+        """
+        benchmark_asset_id = self._portfolio.benchmark_asset_id
+        if benchmark_asset_id is None:
+            return None
+        series = asset_series.get(benchmark_asset_id)
+        if series is None:
+            return None
+        return tuple((bar.trading_day, bar.close) for bar in series.bars)
 
     # ------------------------------------------------------------------
     # Fill simulation
