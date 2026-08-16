@@ -278,6 +278,7 @@ async def test_backtest_is_reproducible_given_identical_input() -> None:
     assert result_a.trades == result_b.trades
     assert result_a.final_positions == result_b.final_positions
     assert result_a.final_cash == result_b.final_cash
+    assert result_a.daily_detail == result_b.daily_detail
 
 
 @pytest.mark.anyio
@@ -438,3 +439,37 @@ async def test_last_day_decision_is_recorded_as_skipped_not_dropped() -> None:
     assert day1_trade.status == "skipped_no_next_day"
     assert day1_trade.trade_date is None
     assert day1_trade.quantity == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_daily_detail_records_target_weights_and_position_values_every_day() -> None:
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+    result = await _run(config)
+
+    # One DailyPortfolioDetail per equity_curve day, same dates, gapless.
+    assert len(result.daily_detail) == len(result.equity_curve)
+    assert [d.valuation_date for d in result.daily_detail] == [
+        s.valuation_date for s in result.equity_curve
+    ]
+
+    # SimpleRuleStrategy always proposes a full target_weights mapping
+    # (asset scores plus the cash residual) summing to exactly 1.
+    for detail in result.daily_detail:
+        assert detail.target_weights
+        assert sum(detail.target_weights.values(), Decimal("0")) == Decimal("1")
+
+    # NVDA/QQQ both quote in USD == the portfolio's base_currency, so this
+    # suite's universe never applies an FX conversion.
+    assert all(detail.fx_rates_applied == {} for detail in result.daily_detail)
+
+    # position_values must reconcile against the aggregate equity_curve total,
+    # and only appear once a fill has actually happened.
+    detail_by_date = {d.valuation_date: d for d in result.daily_detail}
+    for snapshot in result.equity_curve:
+        detail = detail_by_date[snapshot.valuation_date]
+        assert sum(detail.position_values.values(), Decimal("0")) == snapshot.positions_value
+
+    first_fill = next(t for t in result.trades if t.status == "filled" and t.asset_id == _NVDA_ID)
+    assert first_fill.trade_date is not None
+    detail_on_fill_day = detail_by_date[first_fill.trade_date]
+    assert detail_on_fill_day.position_values.get(_NVDA_ID, Decimal("0")) > Decimal("0")

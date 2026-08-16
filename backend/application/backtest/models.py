@@ -40,6 +40,24 @@ computing a benchmark total return from this series should be aware the
 result is only directly comparable to the portfolio's own base-currency
 return when the benchmark's ``quote_currency == config.base_currency``
 (the common case, e.g. a USD portfolio benchmarked against QQQ in USD).
+
+``BacktestResult.daily_detail`` (2026-08-16 addition, closes part of the
+BT-006/BT-007-documented M4 daily-reconciliation gap): another narrow,
+documented additive field. ``ValuationSnapshot`` (``equity_curve``) only
+carries the *aggregate* ``positions_value``/``cash_value``/
+``net_asset_value`` per day -- it has no per-day target-weight record, no
+per-asset dollar breakdown, and no per-day FX rate, so
+``application.backtest.reconciliation`` previously could not check three of
+the M4 exit gate's five named daily-reconciliation dimensions (目标权重/
+汇率, plus 持仓 at anything finer than the aggregate total). ``daily_detail``
+carries exactly those three, one ``DailyPortfolioDetail`` per UTC calendar
+day in ``[config.start_date, config.end_date]``, same gapless alignment as
+``equity_curve`` -- see ``DailyPortfolioDetail``'s own docstring for the
+per-field detail. Defaults to ``()`` for backward compatibility with
+existing hand-built ``BacktestResult`` fixtures that predate this field and
+do not exercise the reconciliation checks that depend on it;
+``application.backtest.engine.BacktestEngine.run()`` always populates it in
+full for a real backtest.
 """
 
 from __future__ import annotations
@@ -108,6 +126,48 @@ class TradeRecord:
 
 
 @dataclass(frozen=True)
+class DailyPortfolioDetail:
+    """One trading day's audit detail beyond the aggregate ``ValuationSnapshot``.
+
+    Populated for every day ``BacktestEngine.run()`` produces (one entry per
+    ``ValuationSnapshot`` in ``BacktestResult.equity_curve``, same
+    ``valuation_date``) so ``application.backtest.reconciliation`` can check
+    three of the M4 exit gate's five named daily-reconciliation dimensions
+    that ``ValuationSnapshot`` alone does not carry: 目标权重
+    (``target_weights``), 汇率 (``fx_rates_applied``), and per-asset 持仓 in
+    dollar terms (``position_values``, vs. ``equity_curve``'s aggregate-only
+    ``positions_value``).
+
+    - ``target_weights``: the strategy's raw ``StrategyOutput.target_weights``
+      for this day, *before* ``rebalance_threshold_pct`` filtering and the
+      stale-day no-new-signal rule (``backtest.rebalance``) are applied --
+      i.e. exactly what the strategy proposed that day, whether or not the
+      engine actually acted on it. Includes the cash key (e.g.
+      ``"cash:USD"``); per CONTRACT-002, values must sum to exactly 1.
+    - ``position_values``: per-asset market value in ``config.base_currency``
+      at this day's close (``quantity * price_base``), for every portfolio
+      member with a nonzero position that day (an asset fully exited that
+      day is simply absent, never a fabricated zero entry).
+      ``sum(position_values.values()) == equity_curve[i].positions_value``
+      for the same day, by construction -- ``reconcile_backtest_result``
+      independently checks this identity still holds, catching a future
+      regression where the two stop being computed together.
+    - ``fx_rates_applied``: the close FX rate (foreign-currency-per-unit ->
+      ``config.base_currency``) actually used to value each non-base quote
+      currency's holdings this day, keyed by currency. Empty when every
+      portfolio member already quotes in ``config.base_currency``.
+
+    Like ``AlignedSeries``/``BacktestResult`` itself, this is not a frozen
+    cross-task contract.
+    """
+
+    valuation_date: date
+    target_weights: dict[str, Decimal]
+    position_values: dict[str, Decimal]
+    fx_rates_applied: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     """The full output of one ``application.backtest.engine.BacktestEngine.run()`` call.
 
@@ -127,7 +187,8 @@ class BacktestResult:
     replaced_risk_checks: tuple[str, ...]
     final_positions: dict[str, Decimal]
     final_cash: Decimal
+    daily_detail: tuple[DailyPortfolioDetail, ...] = ()
     benchmark_price_series: tuple[tuple[date, Decimal], ...] | None = None
 
 
-__all__ = ["BacktestResult", "Side", "TradeRecord", "TradeStatus"]
+__all__ = ["BacktestResult", "DailyPortfolioDetail", "Side", "TradeRecord", "TradeStatus"]

@@ -20,8 +20,10 @@ docstrings/log messages are English; only ``doc/`` design prose is Chinese)
 -- keeping the report in the same language as the identifiers/values it
 embeds avoids an awkward code-switched document.
 
-Six required sections (`05_backtest_reporting_and_reconciliation.md` BT-007
-row + task brief), each implemented by one ``_render_*`` helper below:
+Seven sections (the original six required by
+`05_backtest_reporting_and_reconciliation.md` BT-007 row + task brief, plus
+a 2026-08-16 addition, §7), each implemented by one ``_render_*`` helper
+below:
 
 1. ``_render_config_section`` -- full ``BacktestConfig`` + the matching-rule
    prose `08_backtest_engine.md` §6 requires be written into the report
@@ -44,6 +46,12 @@ row + task brief), each implemented by one ``_render_*`` helper below:
    ``restricted``) a visible count of ``skipped_min_quantity``/
    ``skipped_precision_unavailable`` trades, not buried only in the trade
    table.
+7. ``_render_daily_detail_section`` (2026-08-16 addition) -- per-day
+   ``target_weights``/``position_values``/``fx_rates_applied`` from
+   ``BacktestResult.daily_detail``, making the M4 gate's 目标权重/汇率
+   dimensions human-readable, not just internally cross-checked in §5.
+   Renders a "not available" note instead of a table when ``daily_detail``
+   is empty (a hand-built or pre-2026-08-16 result).
 
 No wall-clock time is read anywhere in this module: ``generated_at`` is a
 required, caller-supplied, timezone-aware ``datetime`` (mirrors
@@ -396,8 +404,11 @@ def _render_risk_substitutions_section(result: BacktestResult) -> str:
     return "\n".join(lines)
 
 
-def _render_reconciliation_section(reconciliation: ReconciliationResult) -> str:
+def _render_reconciliation_section(
+    result: BacktestResult, reconciliation: ReconciliationResult
+) -> str:
     status = "PASSED" if reconciliation.passed else "FAILED"
+    has_daily_detail = bool(result.daily_detail)
     lines = [
         "## 5. Reconciliation Summary",
         "",
@@ -411,17 +422,33 @@ def _render_reconciliation_section(reconciliation: ReconciliationResult) -> str:
         "net_asset_value`).",
         "- Final positions (once, independently accumulated per asset).",
         "- Final cash (once, independently replayed).",
+    ]
+    if has_daily_detail:
+        lines += [
+            "- Per-asset position value vs. the aggregate `positions_value` total, every day.",
+            "- Zero-quantity/zero-value consistency between the independent trade replay and "
+            "the recorded per-asset position values, every day.",
+            "- Target-weight bounds (`[0, 1]`, sums to exactly 1 including the cash key), "
+            "every day a target weight was recorded.",
+            "- FX rate positivity, every day a rate was recorded.",
+        ]
+    else:
+        lines.append(
+            "- *(This result has no `daily_detail` -- see §7. The four checks above that "
+            "depend on it were not run for this result.)*"
+        )
+    lines += [
         "",
-        "**Not checked** (documented gap, `application.backtest.reconciliation` module "
-        "docstring): per-day target weights, per-day FX rates, and per-day per-asset "
-        "positions_value in dollar terms are not independently re-derivable from "
-        "`BacktestResult` as currently defined -- `BacktestResult`/`TradeRecord` carry no "
-        "per-day target-weight record, no per-day per-asset price detail, and no per-day "
-        "FX rate. This report does **not** claim full 目标权重/持仓/现金/汇率/净值 "
-        "(target-weight/position/cash/FX/NAV) five-field daily reconciliation -- only the "
-        "cash/NAV-consistency/final-position/final-cash subset listed above was actually "
-        "performed. See the BT-006 known-gap entry in "
-        "`05_backtest_reporting_and_reconciliation.md` §1.",
+        "**Not checked**, a genuine remaining gap (`application.backtest.reconciliation` "
+        "module docstring): none of the above independently recomputes a per-asset dollar "
+        "value or FX rate from a freshly-loaded, third-party price source -- doing so would "
+        "require re-fetching the same market data `BacktestEngine` already used, which is not "
+        "really an independent check. There is also no check that a `quote_currency`-bearing "
+        "asset actually has an FX rate recorded (`BacktestResult` does not carry per-asset "
+        "currency), and no check that a recorded `target_weights` entry actually caused the "
+        "trade decided that day (would need each asset's per-day price, not just its dollar "
+        "position value). This report does not claim independent numeric reconciliation "
+        "beyond what is listed above.",
         "",
     ]
     if reconciliation.discrepancies:
@@ -480,6 +507,52 @@ def _render_precision_section(result: BacktestResult) -> str:
             lines.append(f"- `{status}`: {skip_counts[status]}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _render_daily_detail_section(result: BacktestResult) -> str:
+    """Per-day target weights / per-asset position values / FX rates (see `daily_detail`).
+
+    Makes the M4 gate's 目标权重/汇率 dimensions actually *readable* by a
+    human, not just internally cross-checked by `application.backtest
+    .reconciliation` -- an auditor should be able to see what the strategy
+    proposed and what FX rate was applied on any given day without opening
+    the raw `BacktestResult` in a debugger.
+    """
+    lines = ["## 7. Daily Detail (Target Weights / Position Values / FX Rates)", ""]
+    if not result.daily_detail:
+        lines.append(
+            "Not available for this result -- `daily_detail` is empty (a hand-built or "
+            "pre-2026-08-16 `BacktestResult`). `application.backtest.engine.BacktestEngine"
+            ".run()` always populates this for a real backtest."
+        )
+        lines.append("")
+        return "\n".join(lines)
+
+    lines += [
+        "| valuation_date | target_weights | position_values | fx_rates_applied |",
+        "| --- | --- | --- | --- |",
+    ]
+    for day_detail in sorted(result.daily_detail, key=lambda d: d.valuation_date):
+        lines.append(
+            f"| {_fmt_date(day_detail.valuation_date)} | "
+            f"{_fmt_weight_map(day_detail.target_weights)} | "
+            f"{_fmt_decimal_map(day_detail.position_values)} | "
+            f"{_fmt_decimal_map(day_detail.fx_rates_applied)} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _fmt_weight_map(values: dict[str, Decimal]) -> str:
+    if not values:
+        return "—"
+    return _escape_cell(", ".join(f"{k}: {_fmt_pct(v)}" for k, v in sorted(values.items())))
+
+
+def _fmt_decimal_map(values: dict[str, Decimal]) -> str:
+    if not values:
+        return "—"
+    return _escape_cell(", ".join(f"{k}: {_fmt_decimal(v)}" for k, v in sorted(values.items())))
 
 
 def _render_summary_section(
@@ -541,8 +614,9 @@ def render_backtest_report(
         _render_performance_section(metrics),
         _render_trade_records_section(result),
         _render_risk_substitutions_section(result),
-        _render_reconciliation_section(reconciliation),
+        _render_reconciliation_section(result, reconciliation),
         _render_precision_section(result),
+        _render_daily_detail_section(result),
     ]
     return "\n".join(sections)
 

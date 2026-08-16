@@ -13,7 +13,12 @@ import pytest
 
 from application.backtest.config import BacktestConfig
 from application.backtest.metrics import compute_backtest_metrics
-from application.backtest.models import BacktestResult, TradeRecord, TradeStatus
+from application.backtest.models import (
+    BacktestResult,
+    DailyPortfolioDetail,
+    TradeRecord,
+    TradeStatus,
+)
 from application.backtest.reconciliation import (
     Discrepancy,
     ReconciliationResult,
@@ -45,6 +50,21 @@ def _snapshot(day_offset: int, *, cash: str, positions: str) -> ValuationSnapsho
         net_asset_value=cash_dec + positions_dec,
         base_currency="USD",
         price_status="fresh",
+    )
+
+
+def _detail(
+    day_offset: int,
+    *,
+    target_weights: dict[str, str],
+    position_values: dict[str, str],
+    fx_rates: dict[str, str] | None = None,
+) -> DailyPortfolioDetail:
+    return DailyPortfolioDetail(
+        valuation_date=_START + timedelta(days=day_offset),
+        target_weights={k: Decimal(v) for k, v in target_weights.items()},
+        position_values={k: Decimal(v) for k, v in position_values.items()},
+        fx_rates_applied={k: Decimal(v) for k, v in (fx_rates or {}).items()},
     )
 
 
@@ -165,6 +185,20 @@ def _full_result() -> BacktestResult:
         _snapshot(3, cash="1047", positions="0"),
         _snapshot(4, cash="1047", positions="0"),
     )
+    daily_detail = (
+        _detail(0, target_weights={"cash:USD": "1"}, position_values={}),
+        _detail(
+            1, target_weights={_ASSET: "0.5", "cash:USD": "0.5"}, position_values={_ASSET: "500"}
+        ),
+        _detail(2, target_weights={_ASSET2: "0.3", "cash:USD": "0.7"}, position_values={}),
+        _detail(
+            3,
+            target_weights={_ASSET2: "0.3", "cash:USD": "0.7"},
+            position_values={},
+            fx_rates={"USDT": "1.0002"},
+        ),
+        _detail(4, target_weights={_ASSET: "0.1", "cash:USD": "0.9"}, position_values={}),
+    )
     benchmark_price_series = (
         (_START, Decimal("100")),
         (_START + timedelta(days=1), Decimal("101")),
@@ -192,6 +226,7 @@ def _full_result() -> BacktestResult:
         ),
         final_positions={},
         final_cash=Decimal("1047"),
+        daily_detail=daily_detail,
         benchmark_price_series=benchmark_price_series,
     )
 
@@ -319,7 +354,12 @@ class TestRenderBacktestReportFullFixture:
         assert "**Result: PASSED**" in md
         assert "(0 discrepancies)" in md
         assert "Not checked" in md
-        assert "目标权重" in md and "汇率" in md  # explicit gap naming, per reconciliation.py
+        # This fixture has daily_detail, so the four extra checks are listed
+        # as performed, not skipped.
+        assert "Per-asset position value vs. the aggregate" in md
+        assert "Target-weight bounds" in md
+        assert "FX rate positivity" in md
+        assert "This result has no `daily_detail`" not in md
 
     def test_precision_section_shows_skip_counts(self) -> None:
         md = self.markdown
@@ -328,6 +368,14 @@ class TestRenderBacktestReportFullFixture:
         assert "2 trade decision(s) were skipped for precision reasons" in md
         assert "`skipped_min_quantity`: 1" in md
         assert "`skipped_precision_unavailable`: 1" in md
+
+    def test_daily_detail_section_renders_the_table(self) -> None:
+        md = self.markdown
+        assert "## 7. Daily Detail (Target Weights / Position Values / FX Rates)" in md
+        assert f"{_ASSET}: 50.00%" in md
+        assert f"{_ASSET}: 500" in md
+        assert "USDT: 1.0002" in md
+        assert "Not available for this result" not in md
 
 
 class TestRenderBacktestReportNoneMetrics:
@@ -370,6 +418,16 @@ class TestRenderBacktestReportNoneMetrics:
         assert "fractional-share orders" in md
         # No skip-count line should appear when nothing was skipped for precision.
         assert "trade decision(s) were skipped for precision reasons" not in md
+
+    def test_reconciliation_section_notes_daily_detail_checks_were_skipped(self) -> None:
+        # _flat_result() predates daily_detail (defaults to ()) -- the four
+        # extra checks must be reported as not run, not silently omitted.
+        assert "This result has no `daily_detail`" in self.markdown
+
+    def test_daily_detail_section_shows_not_available(self) -> None:
+        md = self.markdown
+        assert "## 7. Daily Detail (Target Weights / Position Values / FX Rates)" in md
+        assert "Not available for this result" in md
 
 
 class TestRenderBacktestReportDiscrepancies:

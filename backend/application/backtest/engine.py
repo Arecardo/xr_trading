@@ -143,6 +143,23 @@ contract" note, this is a narrow additive field
 (``BacktestResult.benchmark_price_series``), populated at the end of
 ``_run_day_loop`` from data already in memory -- no new network call, no
 change to the day loop's own logic or existing fields.
+
+**10. ``BacktestResult.daily_detail`` (2026-08-16 addition, closes part of
+the BT-006-documented M4 daily-reconciliation gap).** Step (b)'s valuation
+loop already computes, per asset per day, the base-currency price and the
+FX rate used to get there; step (c)/(d) already computes the strategy's raw
+``target_weights`` before threshold filtering. None of this was previously
+retained past the day it was computed. This decision adds one
+``DailyPortfolioDetail`` per day (``target_weights``, per-asset
+``position_values`` in base currency, and per-currency ``fx_rates_applied``)
+built entirely from values step (b)/(c) already hold in local variables --
+no new computation, no new network call, no change to the fill/valuation
+logic itself. See ``application.backtest.models.DailyPortfolioDetail`` and
+``application.backtest.reconciliation`` for what this newly enables to be
+checked. Still **not** recorded: a per-asset native (pre-FX) price series --
+the target-weight-vs-trade-direction causal check this would additionally
+enable is a further, deliberately deferred enhancement (see
+``reconciliation``'s module docstring).
 """
 
 from __future__ import annotations
@@ -177,7 +194,7 @@ from domain.valuation.models import CashBalance, PortfolioState, Position, Valua
 from .config import BacktestConfig
 from .errors import InvalidBacktestConfigError, UnresolvedInstrumentError, UnsupportedFxPairError
 from .execution import BacktestExecutionService
-from .models import BacktestResult, TradeRecord, TradeStatus
+from .models import BacktestResult, DailyPortfolioDetail, TradeRecord, TradeStatus
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -420,6 +437,7 @@ class BacktestEngine:
         cash = self._config.initial_cash
 
         equity_curve: list[ValuationSnapshot] = []
+        daily_detail: list[DailyPortfolioDetail] = []
         trades: list[TradeRecord] = []
         pending_orders: list[PlannedOrder] = []
         pending_context: dict[str, tuple[Decimal | None, tuple[str, ...], date]] = {}
@@ -469,20 +487,29 @@ class BacktestEngine:
             prices_base: dict[str, Decimal] = {}
             is_stale: dict[str, bool] = {}
             statuses: list[PriceStatus] = []
+            fx_rates_applied: dict[str, Decimal] = {}
             positions_value = _ZERO
             for member in self._members:
                 asset_id = member.asset_id
                 bar = asset_series[asset_id].bars[day_index]
-                price_base, fx_status = self._price_and_status_at(
+                price_base, fx_status, fx_rate = self._price_and_status_at(
                     asset_series, fx_series_by_currency, asset_id, day_index, "close"
                 )
                 prices_base[asset_id] = price_base
                 is_stale[asset_id] = bar.price_status == "stale"
+                if fx_rate is not None:
+                    fx_rates_applied[self._assets[asset_id].quote_currency] = fx_rate
                 if positions[asset_id] != _ZERO:
                     positions_value += positions[asset_id] * price_base
                     statuses.append(bar.price_status)
                     if fx_status is not None:
                         statuses.append(fx_status)
+
+            position_values: dict[str, Decimal] = {
+                asset_id: positions[asset_id] * prices_base[asset_id]
+                for asset_id in prices_base
+                if positions[asset_id] != _ZERO
+            }
 
             nav = positions_value + cash
             price_status: PriceStatus = "fresh" if all(s == "fresh" for s in statuses) else "stale"
@@ -538,6 +565,15 @@ class BacktestEngine:
 
             strategy_output = self._strategy.generate_targets(analysis, portfolio_state)
             scores_by_asset = {s.asset_id: s for s in strategy_output.asset_scores}
+
+            daily_detail.append(
+                DailyPortfolioDetail(
+                    valuation_date=day,
+                    target_weights=dict(strategy_output.target_weights),
+                    position_values=position_values,
+                    fx_rates_applied=fx_rates_applied,
+                )
+            )
 
             # Step (d): diff into orders and risk-check each one.
             planned_orders = diff_target_weights_to_orders(
@@ -641,6 +677,7 @@ class BacktestEngine:
             replaced_risk_checks=self._risk_policy.replaced_checks(),
             final_positions=positions,
             final_cash=cash,
+            daily_detail=tuple(daily_detail),
             benchmark_price_series=self._compute_benchmark_price_series(asset_series),
         )
 
@@ -773,7 +810,7 @@ class BacktestEngine:
         day_index: int,
         field: Literal["open", "close"],
     ) -> Decimal:
-        price, _ = self._price_and_status_at(
+        price, _, _ = self._price_and_status_at(
             asset_series, fx_series_by_currency, asset_id, day_index, field
         )
         return price
@@ -785,16 +822,25 @@ class BacktestEngine:
         asset_id: str,
         day_index: int,
         field: Literal["open", "close"],
-    ) -> tuple[Decimal, PriceStatus | None]:
+    ) -> tuple[Decimal, PriceStatus | None, Decimal | None]:
+        """Returns ``(price_base, fx_status, fx_rate)``.
+
+        ``fx_status``/``fx_rate`` are both ``None`` iff this asset already
+        quotes in ``config.base_currency`` (no conversion applied).
+        ``fx_rate`` (added alongside ``daily_detail``) is the raw rate
+        actually multiplied in, exposed so callers can record it for the
+        day's ``DailyPortfolioDetail.fx_rates_applied`` without a second,
+        possibly-inconsistent lookup.
+        """
         bar = asset_series[asset_id].bars[day_index]
         native_price = bar.open if field == "open" else bar.close
         currency = self._assets[asset_id].quote_currency
         if currency == self._config.base_currency:
-            return native_price, None
+            return native_price, None, None
 
         fx_bar = fx_series_by_currency[currency].bars[day_index]
         fx_rate = fx_bar.open if field == "open" else fx_bar.close
-        return native_price * fx_rate, fx_bar.price_status
+        return native_price * fx_rate, fx_bar.price_status, fx_rate
 
     def _deterministic_id(self, day: date, asset_id: str, seq: int) -> uuid.UUID:
         # See module docstring, decision 6: deterministic, not uuid4().

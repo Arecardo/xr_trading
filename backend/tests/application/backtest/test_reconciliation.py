@@ -8,7 +8,12 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from application.backtest.config import BacktestConfig
-from application.backtest.models import BacktestResult, TradeRecord, TradeStatus
+from application.backtest.models import (
+    BacktestResult,
+    DailyPortfolioDetail,
+    TradeRecord,
+    TradeStatus,
+)
 from application.backtest.reconciliation import reconcile_backtest_result
 from domain.valuation.models import ValuationSnapshot
 
@@ -64,6 +69,21 @@ def _trade(
     )
 
 
+def _detail(
+    day_offset: int,
+    *,
+    target_weights: dict[str, str],
+    position_values: dict[str, str],
+    fx_rates: dict[str, str] | None = None,
+) -> DailyPortfolioDetail:
+    return DailyPortfolioDetail(
+        valuation_date=_START + timedelta(days=day_offset),
+        target_weights={k: Decimal(v) for k, v in target_weights.items()},
+        position_values={k: Decimal(v) for k, v in position_values.items()},
+        fx_rates_applied={k: Decimal(v) for k, v in (fx_rates or {}).items()},
+    )
+
+
 def _correct_result() -> BacktestResult:
     """A hand-built, internally-consistent 3-day BacktestResult.
 
@@ -72,6 +92,11 @@ def _correct_result() -> BacktestResult:
           Revalued at close 100 -> positions_value = 500. nav = 998.
     day2: no new trades. Revalued at close 110 -> positions_value = 550.
           cash unchanged at 498. nav = 1048.
+
+    ``daily_detail`` mirrors the same scenario: no FX (single USD asset), a
+    fixed 50/50 target-weight split from day1 onward (arbitrary but
+    internally consistent -- these tests exercise ``reconcile_backtest_result``,
+    not ``SimpleRuleStrategy``).
     """
     trades = (
         _trade(
@@ -88,6 +113,19 @@ def _correct_result() -> BacktestResult:
         _snapshot(1, cash="498", positions="500"),
         _snapshot(2, cash="498", positions="550"),
     )
+    daily_detail = (
+        _detail(0, target_weights={"cash:USD": "1"}, position_values={}),
+        _detail(
+            1,
+            target_weights={_ASSET: "0.5", "cash:USD": "0.5"},
+            position_values={_ASSET: "500"},
+        ),
+        _detail(
+            2,
+            target_weights={_ASSET: "0.5", "cash:USD": "0.5"},
+            position_values={_ASSET: "550"},
+        ),
+    )
     config = BacktestConfig(
         portfolio_id=_PORTFOLIO_ID,
         start_date=_START,
@@ -102,6 +140,7 @@ def _correct_result() -> BacktestResult:
         replaced_risk_checks=(),
         final_positions={_ASSET: Decimal("5")},
         final_cash=Decimal("498"),
+        daily_detail=daily_detail,
     )
 
 
@@ -139,6 +178,7 @@ class TestReconcileBacktestResult:
             replaced_risk_checks=base.replaced_risk_checks,
             final_positions=base.final_positions,
             final_cash=base.final_cash,
+            daily_detail=base.daily_detail,
         )
 
         result = reconcile_backtest_result(corrupted)
@@ -178,6 +218,7 @@ class TestReconcileBacktestResult:
             replaced_risk_checks=base.replaced_risk_checks,
             final_positions=base.final_positions,
             final_cash=base.final_cash,
+            daily_detail=base.daily_detail,
         )
 
         result = reconcile_backtest_result(corrupted)
@@ -202,6 +243,7 @@ class TestReconcileBacktestResult:
             replaced_risk_checks=base.replaced_risk_checks,
             final_positions={_ASSET: Decimal("999")},  # should be 5, per the one buy fill
             final_cash=base.final_cash,
+            daily_detail=base.daily_detail,
         )
 
         result = reconcile_backtest_result(corrupted)
@@ -222,6 +264,7 @@ class TestReconcileBacktestResult:
             replaced_risk_checks=base.replaced_risk_checks,
             final_positions=base.final_positions,
             final_cash=Decimal("0"),  # should be 498
+            daily_detail=base.daily_detail,
         )
 
         result = reconcile_backtest_result(corrupted)
@@ -262,9 +305,223 @@ class TestReconcileBacktestResult:
             replaced_risk_checks=base.replaced_risk_checks,
             final_positions=base.final_positions,
             final_cash=base.final_cash,
+            daily_detail=base.daily_detail,
         )
 
         result = reconcile_backtest_result(with_noise)
 
         assert result.passed is True
         assert result.discrepancies == ()
+
+    def test_missing_daily_detail_skips_the_daily_detail_checks_not_fails_them(self) -> None:
+        """Backward compatibility: a hand-built result predating ``daily_detail`` still passes."""
+        base = _correct_result()
+        legacy = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            equity_curve=base.equity_curve,
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            # daily_detail intentionally omitted -- defaults to ().
+        )
+
+        result = reconcile_backtest_result(legacy)
+
+        assert result.passed is True
+        assert result.discrepancies == ()
+
+    def test_flags_a_positions_value_breakdown_mismatch(self) -> None:
+        base = _correct_result()
+        corrupted_detail = (
+            base.daily_detail[0],
+            # position_values sums to 400, but equity_curve day1's
+            # positions_value is still 500.
+            _detail(
+                1,
+                target_weights={_ASSET: "0.5", "cash:USD": "0.5"},
+                position_values={_ASSET: "400"},
+            ),
+            base.daily_detail[2],
+        )
+        corrupted = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            equity_curve=base.equity_curve,
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            daily_detail=corrupted_detail,
+        )
+
+        result = reconcile_backtest_result(corrupted)
+
+        assert result.passed is False
+        matches = [
+            d
+            for d in result.discrepancies
+            if d.field == "positions_value_breakdown"
+            and d.valuation_date == _START + timedelta(days=1)
+        ]
+        assert len(matches) == 1
+        assert matches[0].expected == Decimal("500")
+        assert matches[0].actual == Decimal("400")
+
+    def test_flags_a_zero_quantity_zero_value_consistency_break(self) -> None:
+        base = _correct_result()
+        corrupted_detail = (
+            base.daily_detail[0],
+            base.daily_detail[1],
+            # day2: replayed quantity is 5 (nonzero, one buy on day1, no
+            # sells) but position_values records nothing for the asset.
+            _detail(2, target_weights={_ASSET: "0.5", "cash:USD": "0.5"}, position_values={}),
+        )
+        corrupted = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            # positions_value must still equal the (now empty) breakdown sum
+            # to isolate this from the positions_value_breakdown check.
+            equity_curve=(
+                base.equity_curve[0],
+                base.equity_curve[1],
+                ValuationSnapshot(
+                    portfolio_id=_PORTFOLIO_ID,
+                    valuation_date=_START + timedelta(days=2),
+                    positions_value=Decimal("0"),
+                    cash_value=Decimal("498"),
+                    net_asset_value=Decimal("498"),
+                    base_currency="USD",
+                    price_status="fresh",
+                ),
+            ),
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            daily_detail=corrupted_detail,
+        )
+
+        result = reconcile_backtest_result(corrupted)
+
+        assert result.passed is False
+        matches = [
+            d
+            for d in result.discrepancies
+            if d.field == f"position_value_zero_consistency:{_ASSET}"
+            and d.valuation_date == _START + timedelta(days=2)
+        ]
+        assert len(matches) == 1
+        assert matches[0].expected == Decimal("5")
+        assert matches[0].actual == Decimal("0")
+
+    def test_flags_a_target_weight_out_of_bounds(self) -> None:
+        base = _correct_result()
+        corrupted_detail = (
+            base.daily_detail[0],
+            _detail(
+                1,
+                target_weights={_ASSET: "1.5", "cash:USD": "-0.5"},
+                position_values={_ASSET: "500"},
+            ),
+            base.daily_detail[2],
+        )
+        corrupted = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            equity_curve=base.equity_curve,
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            daily_detail=corrupted_detail,
+        )
+
+        result = reconcile_backtest_result(corrupted)
+
+        assert result.passed is False
+        matches = [
+            d
+            for d in result.discrepancies
+            if d.field == f"target_weight_bounds:{_ASSET}"
+            and d.valuation_date == _START + timedelta(days=1)
+        ]
+        assert len(matches) == 1
+        assert matches[0].actual == Decimal("1.5")
+        # -0.5 is also out of bounds (below 0).
+        cash_matches = [
+            d for d in result.discrepancies if d.field == "target_weight_bounds:cash:USD"
+        ]
+        assert len(cash_matches) == 1
+        assert cash_matches[0].actual == Decimal("-0.5")
+
+    def test_flags_a_target_weights_sum_violation(self) -> None:
+        base = _correct_result()
+        corrupted_detail = (
+            base.daily_detail[0],
+            # Sums to 0.9, not 1.
+            _detail(
+                1,
+                target_weights={_ASSET: "0.5", "cash:USD": "0.4"},
+                position_values={_ASSET: "500"},
+            ),
+            base.daily_detail[2],
+        )
+        corrupted = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            equity_curve=base.equity_curve,
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            daily_detail=corrupted_detail,
+        )
+
+        result = reconcile_backtest_result(corrupted)
+
+        assert result.passed is False
+        matches = [
+            d
+            for d in result.discrepancies
+            if d.field == "target_weights_sum" and d.valuation_date == _START + timedelta(days=1)
+        ]
+        assert len(matches) == 1
+        assert matches[0].expected == Decimal("1")
+        assert matches[0].actual == Decimal("0.9")
+
+    def test_flags_a_non_positive_fx_rate(self) -> None:
+        base = _correct_result()
+        corrupted_detail = (
+            base.daily_detail[0],
+            _detail(
+                1,
+                target_weights={_ASSET: "0.5", "cash:USD": "0.5"},
+                position_values={_ASSET: "500"},
+                fx_rates={"HKD": "0"},
+            ),
+            base.daily_detail[2],
+        )
+        corrupted = BacktestResult(
+            portfolio_id=base.portfolio_id,
+            config=base.config,
+            equity_curve=base.equity_curve,
+            trades=base.trades,
+            replaced_risk_checks=base.replaced_risk_checks,
+            final_positions=base.final_positions,
+            final_cash=base.final_cash,
+            daily_detail=corrupted_detail,
+        )
+
+        result = reconcile_backtest_result(corrupted)
+
+        assert result.passed is False
+        matches = [
+            d
+            for d in result.discrepancies
+            if d.field == "fx_rate_positivity:HKD"
+            and d.valuation_date == _START + timedelta(days=1)
+        ]
+        assert len(matches) == 1
+        assert matches[0].actual == Decimal("0")

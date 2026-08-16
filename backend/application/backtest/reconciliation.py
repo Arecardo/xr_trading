@@ -1,11 +1,12 @@
-"""Daily reconciliation of a ``BacktestResult`` (BT-006).
+"""Daily reconciliation of a ``BacktestResult`` (BT-006, extended 2026-08-16).
 
-Implements the M4 exit gate's "逐日对账...净值必须可逐日对账"
+Implements the M4 exit gate's "逐日对账...(目标权重/持仓/现金/汇率/净值)"
 (`05_backtest_reporting_and_reconciliation.md` §3) requirement: an
-*independent* re-derivation of cash and NAV internal consistency from
-``BacktestResult.trades``, checked bit-for-bit (exact ``Decimal`` equality,
-not an approximate/tolerance check) against ``BacktestResult.equity_curve``
-for every UTC calendar day in the run.
+*independent* re-derivation of cash/positions from ``BacktestResult.trades``,
+plus internal-consistency checks against ``BacktestResult.equity_curve`` and
+``BacktestResult.daily_detail``, checked bit-for-bit (exact ``Decimal``
+equality, not an approximate/tolerance check) for every UTC calendar day in
+the run.
 
 Deliberately independent, not a restatement of ``engine.py``
 --------------------------------------------------------------
@@ -25,20 +26,18 @@ diverges from ``equity_curve``'s recorded ``cash_value`` and the mismatch
 is reported as a ``Discrepancy`` -- that is the whole point of this module
 existing as separate code, not a call into ``engine.py``.
 
-Scope, and a genuine, documented gap
--------------------------------------
+Scope
+-----
 `05_backtest_reporting_and_reconciliation.md` §3's exit gate names five
 things to reconcile daily: 目标权重 (target weights) / 持仓 (positions) /
-现金 (cash) / 汇率 (FX) / 净值 (NAV). ``BacktestResult`` as BT-003 defined it
-does **not** carry a per-day target-weight record, a per-day per-asset
-quantity/price breakdown, or the FX rate applied on each day -- only
-``TradeRecord`` (a discrete decision/fill log) and ``equity_curve``
-(aggregate ``positions_value``/``cash_value``/``net_asset_value`` per day,
-with no per-asset or per-currency detail). Given that, this module checks
-everything that *is* independently re-derivable from those two inputs:
+现金 (cash) / 汇率 (FX) / 净值 (NAV). This module checks all five, at two
+different levels of rigor depending on what is genuinely, independently
+re-derivable:
 
-1. **Cash, every day**: reconstructed running cash vs.
-   ``equity_curve[day].cash_value``.
+1. **Cash, every day**: reconstructed running cash (replayed from
+   ``BacktestResult.trades``, starting at ``config.initial_cash``) vs.
+   ``equity_curve[day].cash_value``. Fully independent of ``engine.py``'s
+   own running total.
 2. **NAV internal consistency, every day**: ``equity_curve[day]
    .positions_value + equity_curve[day].cash_value ==
    equity_curve[day].net_asset_value`` -- catches a NAV computed from a
@@ -52,20 +51,60 @@ everything that *is* independently re-derivable from those two inputs:
    are two separately-populated fields in ``engine.py`` and could in
    principle diverge from each other even if each individually matched this
    replay).
+5. **Per-asset positions vs. the aggregate total, every day** (needs
+   ``BacktestResult.daily_detail``, 2026-08-16 addition): ``sum(daily_detail
+   [day].position_values.values()) == equity_curve[day].positions_value``.
+6. **Zero-quantity/zero-value consistency, every day** (needs
+   ``daily_detail``): for every asset that ever appears, the independently
+   *replayed* quantity for that day (item 1's same trade replay, evaluated
+   per day rather than only at the end) is zero if and only if
+   ``daily_detail[day].position_values`` has no nonzero entry for it -- a
+   genuine cross-check between two independently-sourced signals (the trade
+   log replay vs. the recorded per-asset valuation), not merely restating
+   one of them.
+7. **Target-weight bounds, every day with a nonempty ``target_weights``**
+   (needs ``daily_detail``): every weight in ``[0, 1]`` and the full mapping
+   (including the cash key) sums to exactly ``1``, per CONTRACT-002's own
+   ``StrategyOutput.target_weights`` contract. Guards against
+   ``daily_detail`` being corrupted or mis-threaded between the strategy
+   call and ``BacktestResult`` construction -- ``domain.strategies
+   .simple_rule_strategy`` already enforces this at the point the weights
+   are *computed*, so this check's real job is catching a bug in this
+   codebase's own plumbing, not in the strategy itself.
+8. **FX rate positivity, every day** (needs ``daily_detail``): every
+   recorded ``fx_rates_applied`` value is strictly positive. Weaker than a
+   presence check (see the documented gap below) but catches a zero/negative
+   rate slipping through, which no valid market FX rate is.
 
-**Not checked here, and flagged as an open gap for BT-007/BT-003a**:
-per-day *positions_value in dollar terms* cannot be independently
-recomputed without re-loading the same historical price series
-``BacktestEngine`` used (this module intentionally has zero market-data/
-network dependency, matching the rest of ``application.backtest``'s
-"non-deterministic capabilities are injected, not reached for" discipline)
--- doing so would not really be *independent* verification, since any price
-data pulled fresh from the same provider a second time is exactly what the
-engine already used, not a differently-sourced check. Per-day target
-weights and per-day FX rates are not present anywhere in ``BacktestResult``
-at all today; if the M4 gate's literal five-field wording needs to be
-checked at that granularity, ``BacktestResult``/``TradeRecord`` need a
-further additive field (a natural next BT-003a/BT-007 task) to carry them.
+Items 5-8 are skipped for a given day/run when ``BacktestResult
+.daily_detail`` is empty (its default, for backward compatibility with
+hand-built fixtures that predate this field) -- ``BacktestEngine.run()``
+always populates it for a real backtest, so a real run gets full coverage.
+
+Genuine, documented remaining gaps
+-----------------------------------
+- **No independent numeric recomputation of per-asset dollar values or FX
+  rates against a third data source.** Item 5 checks *internal* consistency
+  (aggregate vs. per-asset breakdown, both produced by the same engine run);
+  it does not re-derive either figure from freshly-loaded market data. Doing
+  that would require re-loading the same historical price series
+  ``BacktestEngine`` already used (this module intentionally has zero
+  market-data/network dependency, matching the rest of
+  ``application.backtest``'s "non-deterministic capabilities are injected,
+  not reached for" discipline) -- and a second read of the *same* provider
+  response is not really an independent check to begin with.
+- **No FX-rate-presence-for-every-foreign-asset check.** ``BacktestResult``
+  does not carry each asset's ``quote_currency``, so this module cannot tell
+  *which* assets ought to have an FX rate recorded for a given day -- only
+  that whatever rates *are* recorded are positive (item 8).
+- **No target-weight-to-trade-direction causal check.** Verifying that a
+  recorded ``buy``/``sell`` decision on a given day actually follows from
+  that day's recorded ``target_weights`` (via the same threshold rule
+  ``backtest.rebalance.diff_target_weights_to_orders`` applies) would need
+  each asset's per-day *price*, not just its dollar position value -- not
+  currently carried by ``daily_detail`` either. Deliberately deferred rather
+  than re-implemented on a narrower, potentially-misleading proxy; a natural
+  next task if this granularity is ever required.
 """
 
 from __future__ import annotations
@@ -74,9 +113,12 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from .models import BacktestResult, TradeRecord
+from domain.valuation.models import ValuationSnapshot
+
+from .models import BacktestResult, DailyPortfolioDetail, TradeRecord
 
 _ZERO = Decimal("0")
+_ONE = Decimal("1")
 
 
 @dataclass(frozen=True)
@@ -104,14 +146,97 @@ class ReconciliationResult:
     discrepancies: tuple[Discrepancy, ...]
 
 
+def _check_daily_detail(
+    snapshot: ValuationSnapshot,
+    detail: DailyPortfolioDetail,
+    running_quantities: dict[str, Decimal],
+) -> list[Discrepancy]:
+    """Items 5-8 of the module docstring, for one day. See there for rationale."""
+    found: list[Discrepancy] = []
+    day = snapshot.valuation_date
+
+    # 5. Per-asset breakdown vs. the aggregate total.
+    breakdown_total = sum(detail.position_values.values(), start=_ZERO)
+    if breakdown_total != snapshot.positions_value:
+        found.append(
+            Discrepancy(
+                valuation_date=day,
+                field="positions_value_breakdown",
+                expected=snapshot.positions_value,
+                actual=breakdown_total,
+                detail=(
+                    "sum(daily_detail.position_values) does not match the aggregate "
+                    "equity_curve.positions_value recorded for this day"
+                ),
+            )
+        )
+
+    # 6. Zero-quantity/zero-value consistency between the independent trade
+    # replay and the recorded per-asset valuation.
+    for asset_id in set(running_quantities) | set(detail.position_values):
+        replayed_qty = running_quantities.get(asset_id, _ZERO)
+        recorded_value = detail.position_values.get(asset_id, _ZERO)
+        if (replayed_qty == _ZERO) != (recorded_value == _ZERO):
+            found.append(
+                Discrepancy(
+                    valuation_date=day,
+                    field=f"position_value_zero_consistency:{asset_id}",
+                    expected=replayed_qty,
+                    actual=recorded_value,
+                    detail=(
+                        "independently replayed quantity and daily_detail.position_values "
+                        "disagree on whether this asset was held (zero vs. nonzero) on this day"
+                    ),
+                )
+            )
+
+    # 7. Target-weight bounds (only when the day recorded any).
+    if detail.target_weights:
+        for asset_id, weight in detail.target_weights.items():
+            if weight < _ZERO or weight > _ONE:
+                found.append(
+                    Discrepancy(
+                        valuation_date=day,
+                        field=f"target_weight_bounds:{asset_id}",
+                        expected=_ONE,
+                        actual=weight,
+                        detail="target weight is outside the valid [0, 1] range",
+                    )
+                )
+        weight_total = sum(detail.target_weights.values(), start=_ZERO)
+        if weight_total != _ONE:
+            found.append(
+                Discrepancy(
+                    valuation_date=day,
+                    field="target_weights_sum",
+                    expected=_ONE,
+                    actual=weight_total,
+                    detail="daily_detail.target_weights (including the cash key) does not sum to 1",
+                )
+            )
+
+    # 8. FX rate positivity.
+    for currency, rate in detail.fx_rates_applied.items():
+        if rate <= _ZERO:
+            found.append(
+                Discrepancy(
+                    valuation_date=day,
+                    field=f"fx_rate_positivity:{currency}",
+                    expected=_ZERO,
+                    actual=rate,
+                    detail="recorded FX rate must be strictly positive",
+                )
+            )
+
+    return found
+
+
 def reconcile_backtest_result(result: BacktestResult) -> ReconciliationResult:
     """Independently replay ``result.trades`` and reconcile against ``result.equity_curve``.
 
-    See module docstring for exactly what is (cash/day, NAV-consistency/day,
-    final positions, final cash) and is not (per-day positions_value in
-    dollar terms, target weights, FX rates) checked. Exact ``Decimal``
-    equality throughout -- this is bit-for-bit reconciliation, not an
-    approximate check.
+    See module docstring for the full list of what is checked (items 1-8)
+    and the genuine remaining gaps. Exact ``Decimal`` equality throughout --
+    this is bit-for-bit reconciliation, not an approximate check.
     """
     discrepancies: list[Discrepancy] = []
 
@@ -120,6 +245,10 @@ def reconcile_backtest_result(result: BacktestResult) -> ReconciliationResult:
         if trade.status != "filled" or trade.trade_date is None:
             continue
         trades_by_date.setdefault(trade.trade_date, []).append(trade)
+
+    detail_by_date: dict[date, DailyPortfolioDetail] = {
+        d.valuation_date: d for d in result.daily_detail
+    }
 
     running_cash = result.config.initial_cash
     running_quantities: dict[str, Decimal] = {}
@@ -164,6 +293,10 @@ def reconcile_backtest_result(result: BacktestResult) -> ReconciliationResult:
                     detail="positions_value + cash_value does not equal net_asset_value",
                 )
             )
+
+        detail = detail_by_date.get(snapshot.valuation_date)
+        if detail is not None:
+            discrepancies.extend(_check_daily_detail(snapshot, detail, running_quantities))
 
     final_date = result.config.end_date
     all_asset_ids = set(running_quantities) | set(result.final_positions)
