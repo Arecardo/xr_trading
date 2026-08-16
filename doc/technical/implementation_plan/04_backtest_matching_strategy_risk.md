@@ -37,7 +37,8 @@
 
 | ID | 状态 | 依赖 | 输出 | 测试与完成条件 |
 | --- | --- | --- | --- | --- |
-| BT-003a | TODO | BT-003、BT-006、BT-003b | 用同一组历史数据、同一策略，分别以 `unrestricted`/`restricted` 精度模式跑 NVDA/QQQ 回测，对比目标权重跟踪误差、收益率、回撤等指标。**依赖 BT-003b 的原因**：在没有订单拆单前，默认风控预算下大多数建仓买单会被整笔拒绝，两种精度模式几乎都交易不了多少，跟踪误差对比会失真为「几乎没有交易」的退化场景；BT-003b 落地后仓位才能真实逐步建立，此时的精度取整误差对比才有意义 | 两轮回测均可复现；产出书面结论——是否需提高初始资金/调整标的/接受跟踪误差，写回需求文档 §5.1.1 与 `roadmap/01_decisions.md` DEC-003 |
+| BT-003a | DONE（2026-08-16） | BT-003、BT-006、BT-003b | `backend/application/backtest/tracking_error.py`（`compute_tracking_error`，纯函数，从 BT-006a 的 `daily_detail` 逐日算出每资产实际权重与目标权重的绝对偏差，均值/最大值）+ `backend/scripts/bt003a_precision_comparison.py`（一次性研究脚本，用同一份种子固定、确定性生成的示例性 NVDA/QQQ 日线，分别以 `unrestricted`/`restricted`（`lot_size=1`，NVDA/QQQ 真实长桥精度）跑同一个 `SimpleRuleStrategy`+`SimpleRiskPolicy`（均为默认参数），打印绩效指标与跟踪误差对比） | `compute_tracking_error` 5 个单测覆盖正常/边界/失败路径 ✅；两轮回测用同一 `httpx.MockTransport` handler、固定随机种子，可重复运行得到逐位一致的结果 ✅；`ruff`/`mypy`/`pytest`（422 passed, 33 skipped）/`security-check` 全绿；**书面结论已产出**，见需求文档 §5.1.1「验证结果」与 `roadmap/01_decisions.md` DEC-003——**结论比预期严重**：默认参数下 `restricted` 模式 195 次调仓里 191 次因收缩后数量不足 1 股被跳过（`skipped_min_quantity`），NVDA/QQQ 平均跟踪误差 19%~20%（`unrestricted` 对照约 3.7%），根因是 BT-003b 的风险预算收缩与整股取整在小额资金下相互放大；已列出四个可选应对方向，交给用户裁决 |
+| **BT-003a 已知局限（诚实记录）** | — | — | 1) 价格数据是种子固定的确定性生成序列，不是真实长桥历史行情（本沙箱环境无真实 Provider 凭据、无法实际拉取，见脚本文档字符串）——具体收益率/回撤数字仅供说明用途，不代表真实历史表现；但两轮对比用的是完全相同的一份数据，跟踪误差这个相对比较结论不受此影响；2) 跟踪误差定义是简单的逐日绝对偏差均值，未做年化/风险调整，也未验证是否是行业标准做法，是本任务的判断选择；3) 只跑了一组随机种子/一段时间窗口，未做多组随机种子的敏感性分析，结论的稳健性未经多次重复验证 | — |
 
 ## 4. M3 退出门禁
 
