@@ -34,5 +34,8 @@ market-info-service/bin/
 .run/
 market-info-service/backups/
 
+# Generated reports (BT-007, 09_logging_reports.md §9) -- run output, not source.
+reports/
+
 # OS files
 .DS_Store
