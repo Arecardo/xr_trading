@@ -40,6 +40,7 @@ from backtest.loader import HistoricalDataLoader
 from backtest.market_data_client import MarketInfoBarsClient
 from domain.assets.models import Asset
 from domain.portfolios.models import Portfolio, PortfolioMember
+from domain.risk.models import OrderIntent, RiskCheckResult, RiskPolicy
 from domain.risk.simple_risk_policy import SimpleRiskPolicy
 from domain.strategies.models import AnalysisResult, StrategyOutput
 from domain.strategies.simple_rule_strategy import SimpleRuleStrategy
@@ -178,7 +179,7 @@ async def _run(
     members: tuple[PortfolioMember, ...] | None = None,
     portfolio: Portfolio | None = None,
     strategy: SimpleRuleStrategy | _FixedWeightStrategy | None = None,
-    risk_policy: SimpleRiskPolicy | None = None,
+    risk_policy: RiskPolicy | None = None,
     precision_cache: PrecisionCache | None = None,
     handler: Callable[[httpx.Request], httpx.Response] | None = None,
 ) -> BacktestResult:
@@ -201,7 +202,7 @@ async def _run(
 
 
 def _permissive_risk_policy() -> SimpleRiskPolicy:
-    """A ``SimpleRiskPolicy`` wide enough to let a full-size rebalance through.
+    """A ``SimpleRiskPolicy`` wide enough to let a full-size rebalance through, unshrunk.
 
     ``SimpleRiskPolicy``'s default ``max_order_risk_pct_of_nav`` (0.5% of
     NAV) is a *capital-at-risk* budget (2026-08-16 revision:
@@ -211,14 +212,17 @@ def _permissive_risk_policy() -> SimpleRiskPolicy:
     default single-asset ceiling (20%) times the default equity stop-loss
     assumption (8%) is 1.6%, still above the conservative 0.5% default
     budget -- a "buy" score proposing to reach the full 20% ceiling in one
-    order is structurally rejected by the default budget every time. This is
-    expected, correct risk-based position sizing (scale into a position
-    across multiple orders rather than one lump-sum entry), not a bug -- see
-    the BT-003 task report and implementation plan for the fuller discussion
-    of whether order *sizing* should itself become risk-budget-aware later.
-    Tests below that need a buy to actually execute use this wider per-order
-    budget so they can exercise the rest of the day loop; every other
-    threshold stays at ``SimpleRiskPolicy``'s own conservative default.
+    order does not clear the default budget *at full size*. As of
+    2026-08-16 this is no longer an outright reject: ``BacktestEngine``
+    binary-halves a risk-rejected buy until it clears the budget (see
+    ``_shrink_buy_to_approved``/`08_backtest_engine.md` §9a and
+    ``test_default_risk_policy_shrinks_a_full_weight_cap_buy_instead_of_only_rejecting``
+    below), so a smaller fill now happens even under unmodified defaults.
+    Tests below that specifically need the *full, unshrunk* desired size to
+    fill in one order (to keep their arithmetic simple, or to isolate a
+    different behaviour from the shrink mechanism) still use this wider
+    per-order budget so shrinking never triggers; every other threshold
+    stays at ``SimpleRiskPolicy``'s own conservative default.
     """
     return SimpleRiskPolicy(environment="backtest", max_order_risk_pct_of_nav=Decimal("0.25"))
 
@@ -251,6 +255,40 @@ class _FixedWeightStrategy:
             target_weights={self._asset_id: self._weight, cash_id: Decimal("1") - self._weight},
             rebalance_notes=(),
         )
+
+
+class _QuantityCapRiskPolicy:
+    """A minimal fake ``RiskPolicy``: approves a buy iff its quantity is at or under a fixed cap.
+
+    Used to deterministically exercise ``BacktestEngine``'s shrink-to-approved
+    order-sizing logic (`08_backtest_engine.md` §9a) without depending on
+    ``SimpleRiskPolicy``'s several interacting thresholds -- this fake has
+    exactly one, quantity-only rule, so a test can pick out precisely which
+    order size gets approved. Sells are always approved (nothing to shrink).
+    """
+
+    def __init__(self, max_buy_quantity: Decimal) -> None:
+        self._max_buy_quantity = max_buy_quantity
+
+    def check_order(self, intent: OrderIntent, portfolio_state: PortfolioState) -> RiskCheckResult:
+        if intent.side == "sell" or intent.quantity <= self._max_buy_quantity:
+            return RiskCheckResult(
+                approved=True, rejection_reasons=(), checked_rules=("quantity_cap",), context={}
+            )
+        return RiskCheckResult(
+            approved=False,
+            rejection_reasons=(f"quantity {intent.quantity} exceeds cap {self._max_buy_quantity}",),
+            checked_rules=("quantity_cap",),
+            context={"max_buy_quantity": str(self._max_buy_quantity)},
+        )
+
+    def check_target_weights(
+        self, target_weights: dict[str, Decimal], portfolio_state: PortfolioState
+    ) -> RiskCheckResult:
+        return RiskCheckResult(approved=True, rejection_reasons=(), checked_rules=(), context={})
+
+    def replaced_checks(self) -> tuple[str, ...]:
+        return ()
 
 
 class _FakePrecisionFetcher:
@@ -473,3 +511,83 @@ async def test_daily_detail_records_target_weights_and_position_values_every_day
     assert first_fill.trade_date is not None
     detail_on_fill_day = detail_by_date[first_fill.trade_date]
     assert detail_on_fill_day.position_values.get(_NVDA_ID, Decimal("0")) > Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_a_risk_rejected_buy_shrinks_and_fills_at_the_largest_approved_size() -> None:
+    start = date(2024, 1, 2)
+    end = date(2024, 1, 3)
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=start, end_date=end)
+    # day0 close = 100 (see _nvda_prices), nav = initial_cash = 2500 (no positions yet):
+    # target_value = 0.95 * 2500 = 2375; full-gap quantity = 2375 / 100 = 23.75.
+    # Halving sequence: 11.875 -> 5.9375 -> 2.96875 (<= cap=3, first approved size).
+    strategy = _FixedWeightStrategy(_NVDA_ID, Decimal("0.95"), "USD")
+    risk_policy = _QuantityCapRiskPolicy(max_buy_quantity=Decimal("3"))
+    handler = _make_fixed_handler(_bars_payload([(start, Decimal("100")), (end, Decimal("101"))]))
+
+    result = await _run(
+        config,
+        members=(_members()[0],),  # NVDA only
+        portfolio=_portfolio(benchmark_asset_id=None),
+        strategy=strategy,
+        risk_policy=risk_policy,
+        handler=handler,
+    )
+
+    first_trade = next(t for t in result.trades if t.decision_date == start)
+    assert first_trade.status == "filled"
+    assert first_trade.planned_quantity == Decimal("2.96875")
+    assert first_trade.quantity == Decimal("2.96875")  # unrestricted precision -- no rounding
+    assert any("order size reduced from 23.75 to 2.96875" in r for r in first_trade.reason)
+
+
+@pytest.mark.anyio
+async def test_a_buy_stays_rejected_when_even_the_smallest_shrunk_size_fails_risk() -> None:
+    start = date(2024, 1, 2)
+    end = date(2024, 1, 3)
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=start, end_date=end)
+    # Full-gap quantity is 23.75 (see the sibling test); even 256x smaller
+    # (23.75 / 2**8 ~= 0.0928) still exceeds this cap -- shrinking cannot help.
+    strategy = _FixedWeightStrategy(_NVDA_ID, Decimal("0.95"), "USD")
+    risk_policy = _QuantityCapRiskPolicy(max_buy_quantity=Decimal("0.05"))
+    handler = _make_fixed_handler(_bars_payload([(start, Decimal("100")), (end, Decimal("101"))]))
+
+    result = await _run(
+        config,
+        members=(_members()[0],),
+        portfolio=_portfolio(benchmark_asset_id=None),
+        strategy=strategy,
+        risk_policy=risk_policy,
+        handler=handler,
+    )
+
+    first_trade = next(t for t in result.trades if t.decision_date == start)
+    assert first_trade.status == "rejected"
+    assert first_trade.quantity == Decimal("0")
+    assert result.final_positions[_NVDA_ID] == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_default_risk_policy_shrinks_a_full_weight_cap_buy_instead_of_only_rejecting() -> (
+    None
+):
+    """Under SimpleRiskPolicy's own conservative defaults (no test-only widening),
+    a buy proposing SimpleRuleStrategy's default 20% single-asset ceiling exceeds
+    the 0.5% capital-at-risk budget at full size (20% * 8% assumed equity stop-loss
+    = 1.6% > 0.5%) -- before the shrink mechanism existed this was an outright
+    reject every time (see the now-superseded rationale in _permissive_risk_policy's
+    docstring). With shrinking, two halvings (1.6% / 4 = 0.4% <= 0.5%) clear the
+    budget, so a real fill should occur using the engine's and risk policy's
+    unmodified defaults.
+    """
+    config = BacktestConfig(portfolio_id=_PORTFOLIO_ID, start_date=_START, end_date=_END)
+
+    result = await _run(config, risk_policy=SimpleRiskPolicy(environment="backtest"))
+
+    filled_buys = [
+        t
+        for t in result.trades
+        if t.status == "filled" and t.side == "buy" and t.asset_id == _NVDA_ID
+    ]
+    assert filled_buys, "expected at least one filled NVDA buy under default risk settings"
+    assert any("order size reduced from" in r for t in result.trades for r in t.reason)

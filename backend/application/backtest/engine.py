@@ -160,6 +160,27 @@ checked. Still **not** recorded: a per-asset native (pre-FX) price series --
 the target-weight-vs-trade-direction causal check this would additionally
 enable is a further, deliberately deferred enhancement (see
 ``reconciliation``'s module docstring).
+
+**11. Risk-budget-aware order sizing (2026-08-16 addition, `08_backtest_engine.md`
+§9a).** Before this decision, a buy rejected by ``check_order`` was recorded
+as ``status="rejected"`` outright -- under ``SimpleRiskPolicy``'s
+conservative default per-order risk budget, a buy proposing to close a large
+target-weight gap in one order is rejected essentially every time (correct
+risk-based sizing behaviour, but with no mechanism for the engine to ever
+act on "then submit a smaller order instead"). ``_shrink_buy_to_approved``
+binary-halves a rejected buy's quantity (up to ``_SIZE_SHRINK_ATTEMPTS``
+times) and re-runs ``check_order`` at each smaller size, treating
+``RiskPolicy`` as an opaque approve/reject oracle -- no rejection-reason
+string matching, no duplicated threshold math (only ``domain.risk`` knows
+its own thresholds). Only applies to buys (sells are never weight-cap-blocked
+per the 2026-08-16 buy-only fix, so there is nothing to shrink a sell for).
+Because ``backtest.rebalance.diff_target_weights_to_orders`` recomputes the
+target-weight gap fresh from that day's actual holdings, a partially-filled
+buy is naturally followed by a smaller follow-up order the next day the gap
+is still large enough to clear ``rebalance_threshold_pct`` -- a
+multi-day, budget-respecting position build emerges from the existing
+day loop with no extra scheduling state, in the spirit of a TWAP-style
+split without committing to a fixed slice count or horizon up front.
 """
 
 from __future__ import annotations
@@ -187,7 +208,7 @@ from backtest.rebalance import PlannedOrder, diff_target_weights_to_orders
 from domain.assets.models import Asset
 from domain.execution.models import ExecutionService, Order
 from domain.portfolios.models import Portfolio, PortfolioMember
-from domain.risk.models import OrderIntent, RiskPolicy
+from domain.risk.models import OrderIntent, RiskCheckResult, RiskPolicy
 from domain.strategies.models import AnalysisResult, AssetAnalysis, Strategy
 from domain.valuation.models import CashBalance, PortfolioState, Position, ValuationSnapshot
 
@@ -198,11 +219,17 @@ from .models import BacktestResult, DailyPortfolioDetail, TradeRecord, TradeStat
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
+_TWO = Decimal("2")
 _ORDER_ID_NAMESPACE = uuid.UUID("019fdf90-0000-7000-8000-0000000b7003")
 """Fixed namespace UUID for ``uuid.uuid5`` order-id derivation -- an arbitrary
 but fixed constant (not sourced from any external system), chosen once so
 every ``BacktestEngine`` run derives ids from the same namespace. Never used
 for anything other than seeding a deterministic hash."""
+
+_SIZE_SHRINK_ATTEMPTS = 8
+"""Number of binary halvings tried on a risk-rejected buy before giving up
+(2**8 = 256x resolution). See module docstring decision 11 and
+`08_backtest_engine.md` §9a."""
 
 
 def _pick_daily_ref(refs: Sequence[InstrumentRef], asset_id: str) -> InstrumentRef:
@@ -602,6 +629,24 @@ class BacktestEngine:
                     estimated_price=planned.estimated_price,
                 )
                 risk_result = self._risk_policy.check_order(intent, portfolio_state)
+                approved_quantity = planned.quantity
+                if not risk_result.approved and planned.side == "buy":
+                    risk_result, approved_quantity = self._shrink_buy_to_approved(
+                        planned, portfolio_state, initial_result=risk_result
+                    )
+                    if risk_result.approved and approved_quantity != planned.quantity:
+                        reasons = reasons + (
+                            f"order size reduced from {planned.quantity} to "
+                            f"{approved_quantity} to fit within the per-order risk budget "
+                            "(binary search on quantity, see 08_backtest_engine.md §9a)",
+                        )
+                if risk_result.approved:
+                    planned = PlannedOrder(
+                        asset_id=planned.asset_id,
+                        side=planned.side,
+                        quantity=approved_quantity,
+                        estimated_price=planned.estimated_price,
+                    )
                 order = Order(
                     order_id=self._deterministic_id(day, planned.asset_id, trade_seq),
                     portfolio_id=self._portfolio.portfolio_id,
@@ -846,6 +891,59 @@ class BacktestEngine:
         # See module docstring, decision 6: deterministic, not uuid4().
         name = f"{self._portfolio.portfolio_id}:{day.isoformat()}:{asset_id}:{seq}"
         return uuid.uuid5(_ORDER_ID_NAMESPACE, name)
+
+    # ------------------------------------------------------------------
+    # Risk-budget-aware order sizing (module docstring, decision 11)
+    # ------------------------------------------------------------------
+
+    def _shrink_buy_to_approved(
+        self,
+        planned: PlannedOrder,
+        portfolio_state: PortfolioState,
+        *,
+        initial_result: RiskCheckResult,
+    ) -> tuple[RiskCheckResult, Decimal]:
+        """Binary-halve a risk-rejected buy's quantity until ``check_order`` approves it.
+
+        ``RiskPolicy`` stays an opaque approve/reject oracle here -- this
+        never inspects ``rejection_reasons`` text or duplicates any
+        threshold math (python-backend-standards.md §5: retry-ability comes
+        from explicit classification, not string matching). Any per-order
+        risk rule that gets easier to satisfy as order size shrinks (weight
+        caps, cash floor, the capital-at-risk budget) is handled generically
+        this way; a rule that is size-*insensitive* (e.g. max_held_positions,
+        drawdown_stop_line) correctly stays rejected all the way down to the
+        smallest attempted size -- that is the right outcome, not a bug in
+        this shrink loop.
+
+        Only ever called for ``planned.side == "buy"``; ``initial_result`` is
+        the already-computed, already-rejected ``check_order`` result at
+        ``planned.quantity``, so this does not re-check that exact size.
+        Returns the last ``(result, quantity)`` pair tried -- ``result.
+        approved`` may still be ``False`` if even the smallest attempted size
+        (``planned.quantity / 2**_SIZE_SHRINK_ATTEMPTS``) is rejected, which
+        this reports rather than silently giving up earlier.
+        """
+        quantity = planned.quantity
+        result = initial_result
+        for _ in range(_SIZE_SHRINK_ATTEMPTS):
+            if result.approved:
+                break
+            candidate_quantity = quantity / _TWO
+            if candidate_quantity <= _ZERO:
+                break
+            quantity = candidate_quantity
+            result = self._risk_policy.check_order(
+                OrderIntent(
+                    portfolio_id=self._portfolio.portfolio_id,
+                    asset_id=planned.asset_id,
+                    side=planned.side,
+                    quantity=quantity,
+                    estimated_price=planned.estimated_price,
+                ),
+                portfolio_state,
+            )
+        return result, quantity
 
 
 __all__ = ["BacktestEngine"]

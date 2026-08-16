@@ -22,7 +22,7 @@
 1. [契约冻结与领域地基](./01_contracts_and_foundation.md)（BE-001、BE-002）
 2. [组合估值与行情集成](./02_portfolio_and_market_integration.md)（BE-003、BE-003a、BE-004a、BE-004）
 3. [回测数据与指标](./03_backtest_data_and_indicators.md)（BT-001、BT-002）
-4. [回测撮合、策略与风控](./04_backtest_matching_strategy_risk.md)（BT-003、BT-004、BT-005）
+4. [回测撮合、策略与风控](./04_backtest_matching_strategy_risk.md)（BT-003、BT-004、BT-005、BT-003b）
 5. [回测报告与对账](./05_backtest_reporting_and_reconciliation.md)（BT-006、BT-007、BT-006a）
 
 ## 3. 里程碑
@@ -80,7 +80,8 @@ M1 与 M2' 在 M0 冻结后即可并行；M2 依赖 M1（复用同一批 reposit
 | BT-004 | DONE（2026-08-15） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRuleStrategy` 落地，留了 4 条遗留待办（domain→backtest 依赖、`trading_status` 填充责任、`candidate` 状态是否该买入、默认阈值均为判断非钉死值） |
 | BE-003 | DONE（2026-08-15） | 详见 `02_portfolio_and_market_integration.md`；落地四个新 repository、`StaticAssetInstrumentResolver`（解决 BE-004 遗留的解析器缺口）、`SqlValuationService`（sync Protocol 内部 `asyncio.run` 桥接 async 行情客户端，误用 fail-fast）、`PerformanceSnapshot`（仅 `total_return_pct`/`max_drawdown_pct`/`annualized_volatility`，`sharpe_ratio`/`sortino_ratio`/`benchmark_return_pct` 留给 BT-006/BT-007） |
 | BT-005 | DONE（2026-08-15，2026-08-16 修正） | 详见 `04_backtest_matching_strategy_risk.md`；`SimpleRiskPolicy` 落地，`check_order`/`check_target_weights`/`replaced_checks` 均实现；多项阈值（单资产/加密类别权重上限、现金下限、单笔风险预算、回撤停止线、最大持仓数）取自需求文档 §4.3 或作为已标注的判断值；最大回撤检查依赖的「历史峰值 NAV」目前只能靠构造参数注入，真正的逐日峰值追踪要等 BT-003 事件循环落地；`check_order` 的单资产权重上限检查已修正为仅评估买单，卖出永不因该规则被拒绝（组合超上限时只许减仓不许加仓）；单笔风险预算已按用户确认的解读（止损资金风险，非仓位名义金额）修正，见需求文档 §4.3 澄清 |
-| BT-003 | DONE（2026-08-16） | 详见 `04_backtest_matching_strategy_risk.md`；`BacktestEngine` 落地，日 D 收盘决策/日 D+1 开盘成交避免前视偏差，复用 `SimpleRuleStrategy`/`SimpleRiskPolicy`/`ExecutionService` 同一套代码；发现的单笔风险预算与权重上限冲突已由用户确认按「止损资金风险」解读并修正（见 BT-005 行） |
+| BT-003 | DONE（2026-08-16） | 详见 `04_backtest_matching_strategy_risk.md`；`BacktestEngine` 落地，日 D 收盘决策/日 D+1 开盘成交避免前视偏差，复用 `SimpleRuleStrategy`/`SimpleRiskPolicy`/`ExecutionService` 同一套代码；发现的单笔风险预算与权重上限冲突已由用户确认按「止损资金风险」解读并修正（见 BT-005 行），订单数量本身的收缩见 BT-003b |
+| BT-003b | DONE（2026-08-16） | 详见 `04_backtest_matching_strategy_risk.md` §3a；买单被风控拒绝时引擎二分收缩订单数量重试（最多 8 次），获批后成交，收缩到底仍拒绝才记为 `rejected`；只对买单生效；用户提议「TWAP 式拆单」，采用了同精神但不预设固定分片数/时间窗的自适应版本（逐日重算目标缺口天然形成多日建仓），设计取舍见 `08_backtest_engine.md` §9a |
 | BT-006 | DONE（2026-08-16） | 详见 `05_backtest_reporting_and_reconciliation.md`；扩展绩效指标（Sharpe/Sortino/胜率/盈亏比/换手率/基准对比）+ 独立逐日对账；**已知缺口（已于 BT-006a 补齐）**：M4 字面要求的「逐日目标权重/汇率对账」因 `BacktestResult` 当时无逐日明细字段而未覆盖，只对账了现金/NAV一致性/期末持仓/期末现金 |
 | BT-007 | DONE（2026-08-16） | 详见 `05_backtest_reporting_and_reconciliation.md`；纯函数 Markdown 回测报告生成器，六个必需小节（配置假设/绩效摘要/成交记录/风控替代检查/对账摘要/精度模式），每项指标标注其假设条件，`None` 显式渲染为 "N/A" |
 | BT-006a | DONE（2026-08-16） | 详见 `05_backtest_reporting_and_reconciliation.md` §1a；补齐逐日对账缺口——新增 `BacktestResult.daily_detail`（逐日目标权重/持仓市值/汇率）+ `reconcile_backtest_result` 4 项新检查 + 报告 §7 逐日明细表格；**仍有窄口径缺口**：新检查是内部一致性/合理性校验而非第三方数值复核，见 §1a 与 `reconciliation.py` 模块文档 |
