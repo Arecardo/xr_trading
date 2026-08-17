@@ -10,11 +10,13 @@ target-weight tracking error and returns, compared to unrounded
 
 Run: ``python -m scripts.bt003a_precision_comparison`` from ``backend/``
 (with the project's venv active). Prints the baseline unrestricted-vs-
-restricted comparison, then three sensitivity sweeps (2026-08-16 addition,
-in response to the natural follow-up question "what actually fixes this"):
-initial capital, ``max_order_risk_pct_of_nav`` (BT-003b's shrink budget),
-and per-share price level -- see requirements doc §5.1.1 for the sweep
-results and discussion of the real trade-offs each lever has, not just
+restricted comparison, then four sensitivity sweeps (2026-08-16 addition,
+in response to the natural follow-up question "what actually fixes this,
+and at what cost"): initial capital, ``max_order_risk_pct_of_nav``
+(BT-003b's shrink budget), per-share price level, and a combined sweep
+isolating whether closing the NVDA/QQQ price *gap* specifically (not
+lowering both assets' absolute price) is what matters -- see requirements
+doc §5.1.1 for the results and the real trade-offs each lever has, not just
 "raise the number until it works."
 
 IMPORTANT -- data source honesty
@@ -370,6 +372,32 @@ async def main() -> None:
             _seeded_walk(start_price=Decimal(qqq_start), mu=0.0004, sigma=0.010, seed=_SEED + 1),
         )
         result = await _run_one(precision_mode="restricted", handler=low_handler)
+        _summarize_row(label, result)
+
+    # --- Sensitivity sweep 4: combined levers (restricted, $2,500).
+    # Isolates *why* QQQ specifically dominates the baseline's tracking
+    # error: it is priced 4x NVDA, not because it is expensive in absolute
+    # terms. Tests whether closing that price *gap* (not lowering both
+    # assets' absolute price) is what actually matters, and whether a
+    # modest risk-budget bump that stays inside the requirements doc's
+    # originally documented 0.5%-1% range is enough once combined with it. ---
+    print("\n=== Sensitivity 4: combined levers (restricted, $2,500 capital) ===")
+    for label, budget, nvda_start, qqq_start in (
+        ("1% budget alone, $120/$480 (price gap untouched)", "0.01", "120", "480"),
+        ("default budget, QQQ price parity ($120/$120) alone", "0.005", "120", "120"),
+        ("1% budget + QQQ price parity ($120/$120)", "0.01", "120", "120"),
+    ):
+        combo_handler = _make_handler(
+            _seeded_walk(start_price=Decimal(nvda_start), mu=0.0006, sigma=0.020, seed=_SEED),
+            _seeded_walk(start_price=Decimal(qqq_start), mu=0.0004, sigma=0.010, seed=_SEED + 1),
+        )
+        result = await _run_one(
+            precision_mode="restricted",
+            handler=combo_handler,
+            risk_policy=SimpleRiskPolicy(
+                environment="backtest", max_order_risk_pct_of_nav=Decimal(budget)
+            ),
+        )
         _summarize_row(label, result)
 
 
