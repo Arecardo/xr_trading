@@ -9,7 +9,13 @@ target-weight tracking error and returns, compared to unrounded
 (`precision_mode="unrestricted"`) fills?
 
 Run: ``python -m scripts.bt003a_precision_comparison`` from ``backend/``
-(with the project's venv active).
+(with the project's venv active). Prints the baseline unrestricted-vs-
+restricted comparison, then three sensitivity sweeps (2026-08-16 addition,
+in response to the natural follow-up question "what actually fixes this"):
+initial capital, ``max_order_risk_pct_of_nav`` (BT-003b's shrink budget),
+and per-share price level -- see requirements doc §5.1.1 for the sweep
+results and discussion of the real trade-offs each lever has, not just
+"raise the number until it works."
 
 IMPORTANT -- data source honesty
 ---------------------------------
@@ -231,12 +237,17 @@ class _FixedPrecisionFetcher:
 
 
 async def _run_one(
-    *, precision_mode: str, handler: Callable[[httpx.Request], httpx.Response]
+    *,
+    precision_mode: str,
+    handler: Callable[[httpx.Request], httpx.Response],
+    initial_cash: Decimal = Decimal("2500"),
+    risk_policy: SimpleRiskPolicy | None = None,
 ) -> BacktestResult:
     config = BacktestConfig(
         portfolio_id=_PORTFOLIO_ID,
         start_date=_START,
         end_date=_END,
+        initial_cash=initial_cash,
         precision_mode=precision_mode,  # type: ignore[arg-type]
     )
     precision_cache = (
@@ -256,7 +267,7 @@ async def _run_one(
             # is what makes a meaningful, gradually-built position possible
             # here at all under the default risk budget.
             strategy=SimpleRuleStrategy(),
-            risk_policy=SimpleRiskPolicy(environment="backtest"),
+            risk_policy=risk_policy or SimpleRiskPolicy(environment="backtest"),
             historical_data_loader=loader,
             precision_cache=precision_cache,
         )
@@ -293,11 +304,22 @@ def _print_tracking_error(label: str, errors: dict[str, AssetTrackingError]) -> 
         )
 
 
+def _summarize_row(label: str, result: BacktestResult) -> None:
+    """One compact line per sensitivity-sweep run: fill/skip counts + tracking error."""
+    errors = compute_tracking_error(result)
+    filled = sum(1 for t in result.trades if t.status == "filled")
+    skipped = sum(1 for t in result.trades if t.status == "skipped_min_quantity")
+    parts = [f"{a}={_fmt_pct(e.mean_absolute_error)}" for a, e in sorted(errors.items())]
+    print(f"{label:<48} filled={filled:<4} skipped_min_qty={skipped:<4} " + " ".join(parts))
+
+
 async def main() -> None:
     nvda_prices = _seeded_walk(start_price=Decimal("120"), mu=0.0006, sigma=0.020, seed=_SEED)
     qqq_prices = _seeded_walk(start_price=Decimal("480"), mu=0.0004, sigma=0.010, seed=_SEED + 1)
     handler = _make_handler(nvda_prices, qqq_prices)
 
+    # --- Baseline: unrestricted vs restricted at the platform's documented
+    # $2,500 initial capital and SimpleRiskPolicy's own default risk budget. ---
     unrestricted = await _run_one(precision_mode="unrestricted", handler=handler)
     restricted = await _run_one(precision_mode="restricted", handler=handler)
 
@@ -309,6 +331,46 @@ async def main() -> None:
 
     _print_tracking_error("unrestricted", compute_tracking_error(unrestricted))
     _print_tracking_error("restricted (lot_size=1)", compute_tracking_error(restricted))
+
+    # --- Sensitivity sweep 1: initial capital (all restricted, default risk budget). ---
+    print("\n\n=== Sensitivity 1: initial_cash (restricted, default 0.5% risk budget) ===")
+    for cash in ("2500", "10000", "25000"):
+        result = await _run_one(
+            precision_mode="restricted", handler=handler, initial_cash=Decimal(cash)
+        )
+        _summarize_row(f"initial_cash=${cash}", result)
+
+    # --- Sensitivity sweep 2: max_order_risk_pct_of_nav (restricted, $2,500).
+    # 1.6% = 20% single-asset weight cap * 8% assumed equity stop-loss -- the
+    # threshold at which a full-size buy clears check_order without any
+    # BT-003b shrinking at all (see requirements doc §5.1.1 for the math). ---
+    print("\n=== Sensitivity 2: max_order_risk_pct_of_nav (restricted, $2,500 capital) ===")
+    for budget in ("0.005", "0.01", "0.016", "0.02"):
+        result = await _run_one(
+            precision_mode="restricted",
+            handler=handler,
+            risk_policy=SimpleRiskPolicy(
+                environment="backtest", max_order_risk_pct_of_nav=Decimal(budget)
+            ),
+        )
+        label = f"max_order_risk_pct_of_nav={budget}" + (" (default)" if budget == "0.005" else "")
+        _summarize_row(label, result)
+
+    # --- Sensitivity sweep 3: per-share price level (restricted, $2,500,
+    # default risk budget) -- mechanism check only, not a specific-ticker
+    # recommendation: a lower price has the same effect as more capital,
+    # since what matters is (shrunk order value) / (price per share). ---
+    print("\n=== Sensitivity 3: per-share price level (restricted, $2,500, default budget) ===")
+    for label, nvda_start, qqq_start in (
+        ("actual NVDA/QQQ price level ($120/$480)", "120", "480"),
+        ("4x lower price level ($30/$120)", "30", "120"),
+    ):
+        low_handler = _make_handler(
+            _seeded_walk(start_price=Decimal(nvda_start), mu=0.0006, sigma=0.020, seed=_SEED),
+            _seeded_walk(start_price=Decimal(qqq_start), mu=0.0004, sigma=0.010, seed=_SEED + 1),
+        )
+        result = await _run_one(precision_mode="restricted", handler=low_handler)
+        _summarize_row(label, result)
 
 
 if __name__ == "__main__":
